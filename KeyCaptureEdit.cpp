@@ -16,6 +16,16 @@ void CKeyCaptureEdit::OnKeyDown(UINT nChar, UINT nRepCnt, UINT nFlags)
     UNREFERENCED_PARAMETER(nRepCnt);
     UNREFERENCED_PARAMETER(nFlags);
 
+    if (nChar == VK_BACK)
+    {
+        SetCapturedKey(0);
+        if (CWnd* parent = GetParent())
+        {
+            parent->SendMessage(WM_KEY_CAPTURED, static_cast<WPARAM>(GetDlgCtrlID()), 0);
+        }
+        return;
+    }
+
     SetCapturedKey(nChar);
 
     if (CWnd* parent = GetParent())
@@ -34,6 +44,12 @@ void CKeyCaptureEdit::OnChar(UINT nChar, UINT nRepCnt, UINT nFlags)
 void CKeyCaptureEdit::SetCapturedKey(UINT vk)
 {
     m_vk = vk;
+    if (vk == 0)
+    {
+        SetWindowText(_T(""));
+        return;
+    }
+
     SetWindowText(FormatKeyName(vk));
 }
 

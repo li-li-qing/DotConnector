@@ -7,6 +7,7 @@ CKeyboardClickerApp theApp;
 BOOL CKeyboardClickerApp::InitInstance()
 {
     CWinApp::InitInstance();
+    SetRegistryKey(_T("DotConnector"));
 
     CKeyboardClickerDlg dialog;
     m_pMainWnd = &dialog;
