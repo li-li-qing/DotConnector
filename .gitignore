@@ -11,3 +11,4 @@ Release/
 *.ipch
 *.aps
 dist/
+DotConnector.ini

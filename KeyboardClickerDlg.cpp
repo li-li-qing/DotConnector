@@ -2042,9 +2042,10 @@ void CKeyboardClickerDlg::InitializeClickActionControls()
 
 void CKeyboardClickerDlg::ConfigureDefaultClickActions()
 {
-    m_clickActionCount = 3;
+    m_clickActionCount = 0;
     for (size_t i = 0; i < MaxClickActions; ++i)
     {
+        m_clickControls[i].keyEdit.SetCapturedKey(0);
         m_clickControls[i].intervalEdit.SetWindowText(_T("1000"));
     }
 }
@@ -2528,33 +2529,9 @@ void CKeyboardClickerDlg::InitializeShoutActionControls()
 
 void CKeyboardClickerDlg::ConfigureDefaultShoutActions()
 {
-    m_shoutActionCount = 3;
+    m_shoutActionCount = 0;
 
-    m_shoutControls[0].triggerKeyEdit.SetCapturedKey(VK_F2);
-    m_shoutControls[0].triggerCountEdit.SetWindowText(_T("2"));
-    m_shoutControls[0].chatDelayEdit.SetWindowText(_T("30"));
-    m_shoutControls[0].messageEdit.SetWindowText(_T("我要拉拽了"));
-    m_shoutControls[0].skillWaitEdit.SetWindowText(_T("100"));
-    m_shoutControls[0].sequenceEdit.SetWindowText(_T("F1,50,F3"));
-    m_shoutControls[0].cooldownSkillKeyEdit.SetCapturedKey(VK_F3);
-
-    m_shoutControls[1].triggerKeyEdit.SetCapturedKey(VK_F3);
-    m_shoutControls[1].triggerCountEdit.SetWindowText(_T("1"));
-    m_shoutControls[1].chatDelayEdit.SetWindowText(_T("30"));
-    m_shoutControls[1].messageEdit.SetWindowText(_T("敌人来了"));
-    m_shoutControls[1].skillWaitEdit.SetWindowText(_T("0"));
-    m_shoutControls[1].sequenceEdit.SetWindowText(_T(""));
-    m_shoutControls[1].cooldownSkillKeyEdit.SetCapturedKey(VK_F3);
-
-    m_shoutControls[2].triggerKeyEdit.SetCapturedKey(VK_F4);
-    m_shoutControls[2].triggerCountEdit.SetWindowText(_T("1"));
-    m_shoutControls[2].chatDelayEdit.SetWindowText(_T("30"));
-    m_shoutControls[2].messageEdit.SetWindowText(_T("注意敌人"));
-    m_shoutControls[2].skillWaitEdit.SetWindowText(_T("0"));
-    m_shoutControls[2].sequenceEdit.SetWindowText(_T(""));
-    m_shoutControls[2].cooldownSkillKeyEdit.SetCapturedKey(VK_F4);
-
-    for (size_t i = 3; i < MaxShoutActions; ++i)
+    for (size_t i = 0; i < MaxShoutActions; ++i)
     {
         m_shoutControls[i].triggerKeyEdit.SetCapturedKey(0);
         m_shoutControls[i].triggerCountEdit.SetWindowText(_T("1"));
@@ -3112,12 +3089,14 @@ void CKeyboardClickerDlg::SaveSettings() const
         return;
     }
 
+    app->WriteProfileString(SettingsSection, nullptr, nullptr);
+
     CString randomDeviation;
     GetDlgItemText(IDC_RANDOM_DEVIATION, randomDeviation);
     app->WriteProfileString(SettingsSection, _T("RandomDeviation"), randomDeviation);
 
     app->WriteProfileInt(SettingsSection, _T("ClickActionCount"), static_cast<int>(m_clickActionCount));
-    for (size_t i = 0; i < MaxClickActions; ++i)
+    for (size_t i = 0; i < m_clickActionCount; ++i)
     {
         CString prefix;
         prefix.Format(_T("Click%u"), static_cast<unsigned>(i + 1));
@@ -3128,7 +3107,7 @@ void CKeyboardClickerDlg::SaveSettings() const
 
     app->WriteProfileInt(SettingsSection, _T("ShoutActionCount"), static_cast<int>(m_shoutActionCount));
 
-    for (size_t i = 0; i < MaxShoutActions; ++i)
+    for (size_t i = 0; i < m_shoutActionCount; ++i)
     {
         CString prefix;
         prefix.Format(_T("Shout%u"), static_cast<unsigned>(i + 1));
