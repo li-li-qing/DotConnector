@@ -9,6 +9,12 @@
       <UniqueIdentifier>{b8ce68db-1028-4fe9-8fc6-731b95eaa4c7}</UniqueIdentifier>
       <Extensions>h;hpp;hxx;hm;inl;inc;xsd</Extensions>
     </Filter>
+    <Filter Include="Third Party">
+      <UniqueIdentifier>{1c390278-6826-4e5f-9c9b-90ad6700f135}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Resources">
+      <UniqueIdentifier>{b5c4c022-c0b0-4109-8b39-e490a6957fbc}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="KeyboardClickerApp.cpp">
@@ -34,6 +40,17 @@
     <ClInclude Include="resource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="third_party\dm\dm.dll">
+      <Filter>Third Party</Filter>
+    </None>
+    <None Include="assets\images\.gitkeep">
+      <Filter>Resources</Filter>
+    </None>
+    <None Include="assets\dicts\default.txt">
+      <Filter>Resources</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="KeyboardClicker.rc">

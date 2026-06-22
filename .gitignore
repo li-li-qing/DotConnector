@@ -1,5 +1,7 @@
 .vs/
+.idea/
 x64/
+Win32/
 Debug/
 Release/
 *.user
