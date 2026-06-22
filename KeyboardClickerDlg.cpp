@@ -101,6 +101,7 @@ constexpr UINT DefaultSkillReleaseIntervalMs = 500;
 constexpr UINT MinSkillDetectIntervalMs = 20;
 constexpr UINT MinSkillReleaseIntervalMs = 50;
 constexpr ULONGLONG SkillAvailabilityCacheMs = 3000;
+constexpr DWORD KeyPressHoldMs = 50;
 
 class CAdvancedPasswordDialog : public CDialogEx
 {
@@ -679,6 +680,39 @@ bool WorkerIsExtendedKey(UINT vk)
     }
 }
 
+LPARAM BuildKeyMessageLParam(UINT vk, bool keyUp)
+{
+    const UINT scanCode = MapVirtualKey(vk, MAPVK_VK_TO_VSC);
+    LPARAM lParam = 1 | (static_cast<LPARAM>(scanCode) << 16);
+    if (WorkerIsExtendedKey(vk))
+    {
+        lParam |= static_cast<LPARAM>(1) << 24;
+    }
+    if (keyUp)
+    {
+        lParam |= static_cast<LPARAM>(1) << 30;
+        lParam |= static_cast<LPARAM>(1) << 31;
+    }
+    return lParam;
+}
+
+bool PostKeyToWindow(HWND targetHwnd, UINT vk)
+{
+    if (!IsWindow(targetHwnd))
+    {
+        return false;
+    }
+
+    if (!::PostMessage(targetHwnd, WM_KEYDOWN, static_cast<WPARAM>(vk), BuildKeyMessageLParam(vk, false)))
+    {
+        return false;
+    }
+
+    Sleep(KeyPressHoldMs);
+
+    return ::PostMessage(targetHwnd, WM_KEYUP, static_cast<WPARAM>(vk), BuildKeyMessageLParam(vk, true)) != FALSE;
+}
+
 bool WorkerPrepareForegroundTarget(HWND targetHwnd)
 {
     if (!IsWindow(targetHwnd))
@@ -713,23 +747,21 @@ bool WorkerPrepareForegroundTarget(HWND targetHwnd)
 
 bool WorkerSendInputKey(UINT vk)
 {
-    INPUT inputs[2] = {};
-    inputs[0].type = INPUT_KEYBOARD;
-    inputs[0].ki.wVk = static_cast<WORD>(vk);
-    inputs[0].ki.wScan = static_cast<WORD>(MapVirtualKey(vk, MAPVK_VK_TO_VSC));
-    inputs[0].ki.dwFlags = WorkerIsExtendedKey(vk) ? KEYEVENTF_EXTENDEDKEY : 0;
+    INPUT input = {};
+    input.type = INPUT_KEYBOARD;
+    input.ki.wVk = static_cast<WORD>(vk);
+    input.ki.wScan = static_cast<WORD>(MapVirtualKey(vk, MAPVK_VK_TO_VSC));
+    input.ki.dwFlags = WorkerIsExtendedKey(vk) ? KEYEVENTF_EXTENDEDKEY : 0;
 
-    inputs[1] = inputs[0];
-    inputs[1].ki.dwFlags |= KEYEVENTF_KEYUP;
-
-    const UINT inputCount = static_cast<UINT>(_countof(inputs));
-    if (::SendInput(inputCount, inputs, sizeof(INPUT)) != inputCount)
+    if (::SendInput(1, &input, sizeof(INPUT)) != 1)
     {
         return false;
     }
 
-    Sleep(10);
-    return true;
+    Sleep(KeyPressHoldMs);
+
+    input.ki.dwFlags |= KEYEVENTF_KEYUP;
+    return ::SendInput(1, &input, sizeof(INPUT)) == 1;
 }
 
 bool WorkerSendInputShortcut(UINT modifierVk, UINT vk)
@@ -3215,13 +3247,21 @@ bool CKeyboardClickerDlg::ReadJobs()
 
 bool CKeyboardClickerDlg::SendKey(UINT vk)
 {
-    if (!PrepareForegroundTarget())
+    if (!IsWindow(m_targetHwnd))
     {
+        SetStatus(_T("请先把鼠标移到有效目标窗口/控件上，然后按 F9。"));
         StopJobs();
         return false;
     }
 
-    return SendInputKey(vk);
+    if (!PostKeyToWindow(m_targetHwnd, vk))
+    {
+        SetStatus(_T("后台发送按键失败。"));
+        StopJobs();
+        return false;
+    }
+
+    return true;
 }
 
 bool CKeyboardClickerDlg::SendShoutMessage(size_t index)
@@ -3434,11 +3474,6 @@ void CKeyboardClickerDlg::TriggerCooldownSkill(size_t index)
         return;
     }
 
-    if (!PrepareForegroundTarget())
-    {
-        return;
-    }
-
     const UINT vk = m_shoutControls[index].cooldownSkillKeyEdit.CapturedKey();
     if (vk == 0)
     {
@@ -3446,8 +3481,20 @@ void CKeyboardClickerDlg::TriggerCooldownSkill(size_t index)
         return;
     }
 
-    SendInputKey(vk);
-    SetStatus(_T("报点冷却中，已补按技能键。"));
+    if (!IsWindow(m_targetHwnd))
+    {
+        SetStatus(_T("目标窗口无效，无法补按技能。"));
+        return;
+    }
+
+    if (PostKeyToWindow(m_targetHwnd, vk))
+    {
+        SetStatus(_T("报点冷却中，已后台补按技能键。"));
+    }
+    else
+    {
+        SetStatus(_T("后台补按技能键失败。"));
+    }
 }
 
 bool CKeyboardClickerDlg::PrepareForegroundTarget()
@@ -3488,24 +3535,29 @@ bool CKeyboardClickerDlg::SendInputKey(UINT vk)
     std::array<bool, MaxShoutActions> suspended = {};
     SuspendShoutHotkeysForKey(vk, suspended);
 
-    INPUT inputs[2] = {};
-    inputs[0].type = INPUT_KEYBOARD;
-    inputs[0].ki.wVk = static_cast<WORD>(vk);
-    inputs[0].ki.wScan = static_cast<WORD>(MapVirtualKey(vk, MAPVK_VK_TO_VSC));
-    inputs[0].ki.dwFlags = IsExtendedKey(vk) ? KEYEVENTF_EXTENDEDKEY : 0;
+    INPUT input = {};
+    input.type = INPUT_KEYBOARD;
+    input.ki.wVk = static_cast<WORD>(vk);
+    input.ki.wScan = static_cast<WORD>(MapVirtualKey(vk, MAPVK_VK_TO_VSC));
+    input.ki.dwFlags = IsExtendedKey(vk) ? KEYEVENTF_EXTENDEDKEY : 0;
 
-    inputs[1] = inputs[0];
-    inputs[1].ki.dwFlags |= KEYEVENTF_KEYUP;
-
-    const UINT inputCount = static_cast<UINT>(_countof(inputs));
-    if (::SendInput(inputCount, inputs, sizeof(INPUT)) != inputCount)
+    if (::SendInput(1, &input, sizeof(INPUT)) != 1)
     {
         RestoreSuspendedShoutHotkeys(suspended);
         SetStatus(_T("发送按键失败。"));
         return false;
     }
 
-    Sleep(10);
+    Sleep(KeyPressHoldMs);
+
+    input.ki.dwFlags |= KEYEVENTF_KEYUP;
+    if (::SendInput(1, &input, sizeof(INPUT)) != 1)
+    {
+        RestoreSuspendedShoutHotkeys(suspended);
+        SetStatus(_T("发送按键失败。"));
+        return false;
+    }
+
     RestoreSuspendedShoutHotkeys(suspended);
     return true;
 }

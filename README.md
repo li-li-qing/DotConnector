@@ -28,4 +28,3 @@ MFC 键盘连点器，当前整理为单一 Win32 版本，用于继续接入 32
 - Debuff 基础图片使用 `tie.bmp`、`dizziness.bmp`、`bayonet.bmp`、`collapse.bmp`。
 - Debuff 的“添加样本”按钮会把更多 bmp 复制到 `assets\images\tie\`、`assets\images\dizziness\`、`assets\images\bayonet\`、`assets\images\collapse\`，并自动加入识别列表。
 - Release 输出为 `Win32\Release\DotConnector.exe`。
-- 交付朋友使用时，先构建 `Release|Win32`，再运行 `scripts\BuildInstaller.ps1` 生成 `dist\DotConnectorSetup.exe` 安装包。
