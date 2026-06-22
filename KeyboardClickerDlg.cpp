@@ -2057,7 +2057,7 @@ void CKeyboardClickerDlg::ShowClickActionRows()
     }
     if (CWnd* removeButton = GetDlgItem(IDC_REMOVE_CLICK_ACTION))
     {
-        removeButton->EnableWindow(m_clickActionCount > 1 && !m_running);
+        removeButton->EnableWindow(m_clickActionCount > 0 && !m_running);
     }
     ClampScrollOffsets();
     UpdateScrollBars();
@@ -2476,9 +2476,9 @@ void CKeyboardClickerDlg::OnRemoveClickAction()
         SetStatus(_T("运行中不能减少自动按键。"));
         return;
     }
-    if (m_clickActionCount <= 1)
+    if (m_clickActionCount == 0)
     {
-        SetStatus(_T("至少保留 1 条自动按键。"));
+        SetStatus(_T("当前没有可减少的自动按键。"));
         return;
     }
 
@@ -2700,7 +2700,7 @@ void CKeyboardClickerDlg::ShowShoutActionRows()
     }
     if (CWnd* removeButton = GetDlgItem(IDC_REMOVE_SHOUT_ACTION))
     {
-        removeButton->EnableWindow(canEditRows && m_shoutActionCount > 1);
+        removeButton->EnableWindow(canEditRows && m_shoutActionCount > 0);
     }
     ClampScrollOffsets();
     UpdateScrollBars();
@@ -2912,9 +2912,9 @@ void CKeyboardClickerDlg::OnRemoveShoutAction()
         return;
     }
 
-    if (m_shoutActionCount <= 1)
+    if (m_shoutActionCount == 0)
     {
-        SetStatus(_T("至少保留 1 条喊话动作。"));
+        SetStatus(_T("当前没有可减少的喊话动作。"));
         return;
     }
 
@@ -2949,7 +2949,7 @@ void CKeyboardClickerDlg::LoadSettings()
     SetDlgItemText(IDC_RANDOM_DEVIATION, app->GetProfileString(SettingsSection, _T("RandomDeviation"), _T("0")));
 
     const int clickCount = app->GetProfileInt(SettingsSection, _T("ClickActionCount"), static_cast<int>(m_clickActionCount));
-    if (clickCount >= 1 && clickCount <= static_cast<int>(MaxClickActions))
+    if (clickCount >= 0 && clickCount <= static_cast<int>(MaxClickActions))
     {
         m_clickActionCount = static_cast<size_t>(clickCount);
     }
@@ -2984,7 +2984,7 @@ void CKeyboardClickerDlg::LoadSettings()
     }
 
     const int actionCount = app->GetProfileInt(SettingsSection, _T("ShoutActionCount"), static_cast<int>(m_shoutActionCount));
-    if (actionCount >= 1 && actionCount <= static_cast<int>(MaxShoutActions))
+    if (actionCount >= 0 && actionCount <= static_cast<int>(MaxShoutActions))
     {
         m_shoutActionCount = static_cast<size_t>(actionCount);
     }
