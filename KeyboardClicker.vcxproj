@@ -72,7 +72,7 @@
       <SubSystem>Windows</SubSystem>
     </Link>
     <PostBuildEvent>
-      <Command>copy /Y "$(ProjectDir)third_party\dm\dm.dll" "$(OutDir)dm.dll"</Command>
+      <Command>copy /Y "$(ProjectDir)third_party\dm\Fairy.dll" "$(OutDir)Fairy.dll"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -97,7 +97,7 @@
       <OptimizeReferences>true</OptimizeReferences>
     </Link>
     <PostBuildEvent>
-      <Command>copy /Y "$(ProjectDir)third_party\dm\dm.dll" "$(OutDir)dm.dll"</Command>
+      <Command>copy /Y "$(ProjectDir)third_party\dm\Fairy.dll" "$(OutDir)Fairy.dll"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -112,7 +112,7 @@
     <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="third_party\dm\dm.dll" />
+    <None Include="third_party\dm\Fairy.dll" />
     <None Include="assets\images\.gitkeep" />
     <None Include="assets\dicts\default.txt" />
     <ResourceCompile Include="KeyboardClicker.rc" />

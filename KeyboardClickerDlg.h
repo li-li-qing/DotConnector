@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <array>
 #include <atomic>
@@ -44,6 +44,11 @@ protected:
     afx_msg void OnSkillEnabledChanged(UINT nID);
     afx_msg void OnSkillIntervalChanged(UINT nID);
     afx_msg void OnSkillDebuffChanged(UINT nID);
+    afx_msg void OnPotionEnabledChanged();
+    afx_msg void OnPotionSettingsChanged();
+    afx_msg void OnSelectPotionNumberRegion();
+    afx_msg void OnSelectPotionBottleRegion(UINT nID);
+    afx_msg void OnAddPotionSample(UINT nID);
     afx_msg void OnAddDebuffSample(UINT nID);
     afx_msg void OnSelectDebuffRegion();
     afx_msg void OnSelectHornRegion();
@@ -53,6 +58,8 @@ protected:
     afx_msg LRESULT OnAsyncStatus(WPARAM wParam, LPARAM lParam);
     // 处理后台识图任务完成后的 UI 更新和按键发送。
     afx_msg LRESULT OnSkillWorkerFinished(WPARAM wParam, LPARAM lParam);
+    // 处理数字药品后台检测任务完成后的 UI 更新和按键发送。
+    afx_msg LRESULT OnPotionWorkerFinished(WPARAM wParam, LPARAM lParam);
     // 处理后台喊话任务完成后的热键恢复和状态刷新。
     afx_msg LRESULT OnShoutWorkerFinished(WPARAM wParam, LPARAM lParam);
     DECLARE_MESSAGE_MAP()
@@ -156,6 +163,42 @@ private:
         std::array<CButton, 4> debuffChecks;
     };
 
+    struct PotionBottleState
+    {
+        bool hasRegion = false;
+        CRect region;
+        bool available = false;
+        bool hasAvailability = false;
+        ULONGLONG lastDetectTick = 0;
+        ULONGLONG lastPressTick = 0;
+    };
+
+    struct NumberPotionState
+    {
+        bool enabled = false;
+        bool hasNumberRegion = false;
+        CRect numberRegion;
+        UINT numberIntervalMs = 200;
+        bool hasLastNumber = false;
+        UINT lastNumber = 0;
+        ULONGLONG lastNumberTick = 0;
+        std::array<PotionBottleState, 2> bottles;
+    };
+
+    struct PotionControls
+    {
+        CButton regionButton;
+        CButton sampleButton;
+        CStatic regionLabel;
+        CStatic intervalLabel;
+        CEdit intervalEdit;
+        CStatic keyLabel;
+        CKeyCaptureEdit keyEdit;
+        CStatic thresholdLabel;
+        CEdit thresholdEdit;
+        CStatic availabilityLabel;
+    };
+
     static constexpr int HotkeyCaptureTarget = 1;
     static constexpr int HotkeyShoutBase = 10;
     static constexpr size_t MaxClickActions = 50;
@@ -188,6 +231,8 @@ private:
     void LayoutBasePage();
     // 布局高级识图技能页面。
     void LayoutAdvancedPage();
+    // 布局数字药品检测页面。
+    void LayoutPotionPage();
     // 布局底部状态栏与调试输出区域。
     void LayoutDebugPanel();
     void MoveDlgItem(int controlId, int x, int y, int width, int height);
@@ -202,6 +247,7 @@ private:
     void ShowShoutActionRows();
     void ShowBasePageControls(int show);
     void ShowAdvancedPageControls(int show);
+    void ShowPotionPageControls(int show);
     void UpdateAdvancedControls();
     // 根据运行状态刷新“开始/结束”按钮。
     void UpdateSkillMonitorButtonText();
@@ -217,26 +263,38 @@ private:
     bool SendInputShortcut(UINT modifierVk, UINT vk);
     bool SendMouseWheel(int delta);
     bool RegisterDmPlugin();
+    // 验证高级功能密码，验证成功只允许继续初始化，不立即持久化。
     bool RequestAdvancedPassword();
-    void MarkAdvancedAuthorized();
+    // 保存高级功能密码缓存，仅在 Fairy 注册和资源初始化成功后调用。
+    void SaveAdvancedPasswordAuthorization();
+    // 清除高级功能密码缓存，确保注册失败后可以重新输入密码。
+    void ClearAdvancedPasswordAuthorization();
     void ReleaseDmResources();
     bool InitializeDmResources(IDispatch* dm);
     bool SelectScreenRegion(CRect& region);
     void SetRegionStatus(CStatic& label, bool hasRegion, const CRect& region, LPCTSTR emptyText);
     void StopHornMonitoring();
+    void StopPotionMonitoring();
     // 回收已经结束的后台线程资源。
     void JoinFinishedAsyncWorkers();
     // 从后台线程安全投递状态文本到主窗口。
     void PostStatusFromWorker(const CString& text);
     bool HasEnabledAdvancedSkill() const;
     void UpdateSkillMonitoringTimer();
+    void UpdatePotionMonitoringTimer();
     UINT ReadSkillDetectIntervalMs(size_t index) const;
     UINT ReadSkillReleaseIntervalMs(size_t index) const;
+    UINT ReadPotionNumberIntervalMs() const;
+    UINT ReadPotionBottleIntervalMs(size_t index) const;
+    bool ReadPotionThreshold(size_t index, UINT& value) const;
     UINT NextSkillMonitorDelay() const;
+    UINT NextPotionMonitorDelay() const;
     bool DetectSkillOnce(size_t index);
     bool DetectBestSkillOnce(bool saveSettings = true, bool respectIntervals = false);
     // 快照识图配置并投递到后台线程执行。
     bool LaunchSkillDetection(const std::vector<size_t>& order, bool saveSettings, bool respectIntervals);
+    // 快照数字与药瓶配置并投递到后台线程执行。
+    bool LaunchPotionDetection(bool respectIntervals);
     bool AnyConfiguredDebuffFound();
     double ReadHornSimilarity() const;
     void InvalidateHornPictureCache();
@@ -253,8 +311,12 @@ private:
     CString GetHornSampleDirectory() const;
     CString GetSkillSampleDirectory(size_t index) const;
     CString GetDebuffSampleDirectory(size_t index) const;
+    CString GetPotionSampleDirectory(size_t index) const;
     bool AddPictureSamples(const CString& directory, LPCTSTR label);
     bool AddDebuffSample(size_t index);
+    bool ValidatePotionMonitoringSettings();
+    CString BuildPotionPictureList(size_t index) const;
+    void UpdatePotionStatusLabels();
     CString MakeUniqueSamplePath(const CString& directory, const CString& extension) const;
     CString GetDmResourceRootForUse() const;
     bool DmFindPicEx(const CRect& region, const CString& pictures, CString& result);
@@ -322,14 +384,27 @@ private:
     std::array<AdvancedSkillControls, AdvancedSkillCount> m_skillControls;
     std::array<AdvancedSkillState, AdvancedSkillCount> m_skillStates;
     HornState m_hornState;
+    CStatic m_potionGroup;
+    CButton m_potionEnabledCheck;
+    CButton m_potionNumberRegionButton;
+    CStatic m_potionNumberRegionLabel;
+    CStatic m_potionNumberIntervalLabel;
+    CEdit m_potionNumberIntervalEdit;
+    CStatic m_potionStatusLabel;
+    std::array<PotionControls, 2> m_potionControls;
+    NumberPotionState m_potionState;
     // 高级页自动检测的开始/结束按钮。
     CButton m_skillMonitorButton;
     // 后台识图线程，避免阻塞 UI 消息循环。
     std::thread m_skillWorker;
+    // 后台数字药品检测线程，避免 OCR 和识图阻塞 UI。
+    std::thread m_potionWorker;
     // 后台喊话线程，承载 Sleep 和剪贴板流程。
     std::thread m_shoutWorker;
     // 标记识图后台任务是否正在运行。
     std::atomic_bool m_skillWorkerActive = false;
+    // 标记数字药品后台任务是否正在运行。
+    std::atomic_bool m_potionWorkerActive = false;
     // 标记喊话后台任务是否正在运行。
     std::atomic_bool m_shoutWorkerActive = false;
     // 空闲时轮询探测技能图标可用状态的起始下标，避免每轮扫描所有技能。

@@ -42,7 +42,7 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <None Include="third_party\dm\dm.dll">
+    <None Include="third_party\dm\Fairy.dll">
       <Filter>Third Party</Filter>
     </None>
     <None Include="assets\images\.gitkeep">

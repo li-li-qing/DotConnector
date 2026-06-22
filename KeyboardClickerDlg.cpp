@@ -1,4 +1,4 @@
-#include "KeyboardClickerDlg.h"
+﻿#include "KeyboardClickerDlg.h"
 
 #include "resource.h"
 
@@ -8,7 +8,7 @@
 #include <memory>
 #include <vector>
 
-#import "third_party\\dm\\dm.dll" no_namespace named_guids \
+#import "third_party\\dm\\Fairy.dll" no_namespace named_guids \
     rename("CopyFile", "DmCopyFile") \
     rename("DeleteFile", "DmDeleteFile") \
     rename("FindWindow", "DmFindWindow") \
@@ -25,12 +25,12 @@
 namespace
 {
 constexpr LPCTSTR SettingsSection = _T("Settings");
-constexpr LPCTSTR DmDllFileName = _T("dm.dll");
-constexpr LPCTSTR DmProjectDllPath = _T("third_party\\dm\\dm.dll");
+constexpr LPCTSTR DmDllFileName = _T("Fairy.dll");
+constexpr LPCTSTR DmProjectDllPath = _T("third_party\\dm\\Fairy.dll");
 constexpr LPCTSTR DmImageFolderName = _T("assets\\images");
 constexpr LPCTSTR DmDictFolderName = _T("assets\\dicts");
 constexpr LPCTSTR DmDefaultDictRelativePath = _T("assets\\dicts\\default.txt");
-constexpr LPCWSTR DmRegistrationCode = L"9752236420d88364e6c355f4ca176d362e4d4833f";
+constexpr LPCWSTR DmRegistrationCode = L"975223642e30c3cec09c60273e44f4c71865dd2cb";
 constexpr LPCWSTR DmAdditionalCode = L"1886668989";
 constexpr LPCTSTR AdvancedFeaturePassword = _T("1886668989");
 constexpr int MinWindowWidth = 820;
@@ -82,6 +82,14 @@ constexpr int IDC_SKILL_PRIORITY_BASE = AdvancedControlBase + 150;
 constexpr int IDC_SKILL_ENABLED_BASE = AdvancedControlBase + 160;
 constexpr int IDC_SKILL_INTERVAL_BASE = AdvancedControlBase + 170;
 constexpr int IDC_SKILL_DETECT_INTERVAL_BASE = AdvancedControlBase + 180;
+constexpr int IDC_POTION_ENABLED = AdvancedControlBase + 220;
+constexpr int IDC_POTION_NUMBER_REGION = AdvancedControlBase + 221;
+constexpr int IDC_POTION_NUMBER_INTERVAL = AdvancedControlBase + 222;
+constexpr int IDC_POTION_BOTTLE_REGION_BASE = AdvancedControlBase + 230;
+constexpr int IDC_POTION_BOTTLE_SAMPLE_BASE = AdvancedControlBase + 240;
+constexpr int IDC_POTION_BOTTLE_INTERVAL_BASE = AdvancedControlBase + 250;
+constexpr int IDC_POTION_BOTTLE_KEY_BASE = AdvancedControlBase + 260;
+constexpr int IDC_POTION_BOTTLE_THRESHOLD_BASE = AdvancedControlBase + 270;
 constexpr int AdvancedTabHeight = 28;
 constexpr int AdvancedHintHeight = 24;
 constexpr int MaxDebugTextLength = 24000;
@@ -90,16 +98,23 @@ constexpr int MaxDebugLineLength = 900;
 constexpr UINT WM_APP_ASYNC_STATUS = WM_APP + 101;
 constexpr UINT WM_APP_SKILL_WORKER_FINISHED = WM_APP + 102;
 constexpr UINT WM_APP_SHOUT_WORKER_FINISHED = WM_APP + 103;
+constexpr UINT WM_APP_POTION_WORKER_FINISHED = WM_APP + 104;
 constexpr double DmFindPicSimilarity = 0.9;
 constexpr LPCTSTR DmFindPicDeltaColor = _T("000000");
+constexpr LPCTSTR DmNumberOcrColor = _T("acae91-494A62");
 constexpr LPCTSTR HornPicturePath = _T("assets\\images\\horn.bmp");
 constexpr LPCTSTR HornRootPicturePattern = _T("horn*.bmp");
 constexpr LPCTSTR HornSampleDirectory = _T("assets\\images\\horn");
 constexpr ULONGLONG HornPictureRefreshMs = 1000;
+constexpr UINT_PTR PotionTimerId = 4100;
 constexpr UINT DefaultSkillDetectIntervalMs = 50;
 constexpr UINT DefaultSkillReleaseIntervalMs = 500;
 constexpr UINT MinSkillDetectIntervalMs = 20;
 constexpr UINT MinSkillReleaseIntervalMs = 50;
+constexpr UINT DefaultPotionNumberIntervalMs = 200;
+constexpr UINT DefaultPotionBottleIntervalMs = 500;
+constexpr UINT MinPotionIntervalMs = 20;
+constexpr UINT PotionPressCooldownMs = 300;
 constexpr ULONGLONG SkillAvailabilityCacheMs = 3000;
 constexpr DWORD KeyPressHoldMs = 50;
 
@@ -184,6 +199,19 @@ constexpr DebuffDefinition DebuffDefinitions[] = {
     { _T("倒地(collapse.bmp)"), _T("assets\\images\\collapse.bmp"), _T("assets\\images\\collapse") },
 };
 
+struct PotionDefinition
+{
+    LPCTSTR label;
+    LPCTSTR settingsPrefix;
+    LPCTSTR rootPicturePattern;
+    LPCTSTR sampleDirectory;
+};
+
+constexpr PotionDefinition PotionDefinitions[] = {
+    { _T("小绿瓶"), _T("SmallGreenPotion"), _T("small_green_potion*.bmp"), _T("assets\\images\\small_green_potion") },
+    { _T("大红瓶"), _T("BigRedPotion"), _T("big_red_potion*.bmp"), _T("assets\\images\\big_red_potion") },
+};
+
 struct AsyncStatusMessage
 {
     CString text;
@@ -242,6 +270,59 @@ struct SkillDetectionResult
     CString message;
     std::vector<CString> diagnostics;
     std::vector<SkillAvailabilityUpdate> availabilityUpdates;
+};
+
+struct PotionDetectionItem
+{
+    size_t index = 0;
+    UINT keyVk = 0;
+    UINT threshold = 0;
+    UINT detectIntervalMs = DefaultPotionBottleIntervalMs;
+    CRect region;
+    CString pictures;
+    bool detectDue = false;
+    bool cachedAvailable = false;
+    bool hasCachedAvailability = false;
+    ULONGLONG lastDetectTick = 0;
+    ULONGLONG lastPressTick = 0;
+};
+
+struct PotionDetectionTask
+{
+    HWND targetHwnd = nullptr;
+    CString dmDllPath;
+    CString resourceRoot;
+    double similarity = 0.9;
+    bool readNumberDue = false;
+    bool hasCachedNumber = false;
+    UINT cachedNumber = 0;
+    UINT numberIntervalMs = DefaultPotionNumberIntervalMs;
+    ULONGLONG dispatchTick = 0;
+    CRect numberRegion;
+    std::vector<PotionDetectionItem> items;
+};
+
+struct PotionAvailabilityUpdate
+{
+    size_t index = 0;
+    bool available = false;
+    ULONGLONG tick = 0;
+};
+
+struct PotionDetectionResult
+{
+    bool success = false;
+    bool inputAlreadySent = false;
+    bool inputFailed = false;
+    bool attemptedNumberRead = false;
+    bool numberRead = false;
+    UINT number = 0;
+    size_t index = 0;
+    UINT keyVk = 0;
+    CString rawNumberText;
+    CString message;
+    std::vector<CString> diagnostics;
+    std::vector<PotionAvailabilityUpdate> availabilityUpdates;
 };
 
 struct ShoutWorkerTask
@@ -995,6 +1076,74 @@ bool WorkerExecuteSequenceToken(const CString& token, CString& error)
     return true;
 }
 
+bool ExtractFirstUnsignedNumber(const CString& text, UINT& value)
+{
+    value = 0;
+    CString digits;
+    for (int i = 0; i < text.GetLength(); ++i)
+    {
+        const wchar_t ch = text[i];
+        if (ch >= L'0' && ch <= L'9')
+        {
+            digits += ch;
+            continue;
+        }
+        if (!digits.IsEmpty())
+        {
+            break;
+        }
+    }
+
+    if (digits.IsEmpty())
+    {
+        return false;
+    }
+
+    wchar_t* end = nullptr;
+    const unsigned long parsedValue = wcstoul(digits, &end, 10);
+    if (end == static_cast<LPCWSTR>(digits) || *end != L'\0' || parsedValue > UINT_MAX)
+    {
+        return false;
+    }
+
+    value = static_cast<UINT>(parsedValue);
+    return true;
+}
+
+bool WorkerDmOcrNumber(IDispatch* dmObject, const CRect& region, double similarity, CString& rawText, UINT& value, CString& error)
+{
+    rawText.Empty();
+    value = 0;
+    error.Empty();
+    if (dmObject == nullptr)
+    {
+        return false;
+    }
+
+    try
+    {
+        _bstr_t raw = static_cast<Idmsoft*>(dmObject)->Ocr(region.left, region.top, region.right, region.bottom, _bstr_t(DmNumberOcrColor), similarity);
+        const wchar_t* text = static_cast<const wchar_t*>(raw);
+        if (text != nullptr)
+        {
+            rawText = text;
+        }
+    }
+    catch (const _com_error& comError)
+    {
+        error.Format(_T("Ocr 调用失败，HRESULT=0x%08X"), static_cast<unsigned>(comError.Error()));
+        return false;
+    }
+
+    rawText.Trim();
+    if (!ExtractFirstUnsignedNumber(rawText, value))
+    {
+        error.Format(_T("数字 OCR 未解析到有效数字，原始返回=%s"), rawText.IsEmpty() ? _T("<空>") : static_cast<LPCTSTR>(rawText));
+        return false;
+    }
+    return true;
+}
+
 bool WorkerDmFindPicEx(IDispatch* dmObject, const CRect& region, const CString& pictures, double similarity, CString& result, CString& error)
 {
     result.Empty();
@@ -1032,14 +1181,14 @@ bool CreateWorkerDmObject(const CString& dmDllPath, const CString& resourceRoot,
     dmModule = LoadLibraryW(dmDllPath);
     if (dmModule == nullptr)
     {
-        error.Format(_T("后台加载 dm.dll 失败，错误码: %lu"), GetLastError());
+        error.Format(_T("后台加载 Fairy.dll 失败，错误码: %lu"), GetLastError());
         return false;
     }
 
     auto getClassObject = reinterpret_cast<DllGetClassObjectProc>(GetProcAddress(dmModule, "DllGetClassObject"));
     if (getClassObject == nullptr)
     {
-        error = _T("后台 dm.dll 中未找到 DllGetClassObject。");
+        error = _T("后台 Fairy.dll 中未找到 DllGetClassObject。");
         return false;
     }
 
@@ -1079,6 +1228,13 @@ bool CreateWorkerDmObject(const CString& dmDllPath, const CString& resourceRoot,
         if (setDictResult != 1)
         {
             error.Format(_T("后台 SetDict 返回 %ld。"), setDictResult);
+            return false;
+        }
+
+        const long useDictResult = static_cast<Idmsoft*>(dmObject)->UseDict(0);
+        if (useDictResult != 1)
+        {
+            error.Format(_T("后台 UseDict(0) 返回 %ld。"), useDictResult);
             return false;
         }
     }
@@ -1214,11 +1370,21 @@ BEGIN_MESSAGE_MAP(CKeyboardClickerDlg, CDialogEx)
     ON_CONTROL_RANGE(EN_CHANGE, IDC_SKILL_INTERVAL_BASE + 0, IDC_SKILL_INTERVAL_BASE + 3, &CKeyboardClickerDlg::OnSkillIntervalChanged)
     ON_CONTROL_RANGE(EN_CHANGE, IDC_SKILL_DETECT_INTERVAL_BASE + 0, IDC_SKILL_DETECT_INTERVAL_BASE + 3, &CKeyboardClickerDlg::OnSkillIntervalChanged)
     ON_CONTROL_RANGE(BN_CLICKED, IDC_SKILL_DEBUFF_BASE, IDC_SKILL_DEBUFF_BASE + 15, &CKeyboardClickerDlg::OnSkillDebuffChanged)
+    ON_BN_CLICKED(IDC_POTION_ENABLED, &CKeyboardClickerDlg::OnPotionEnabledChanged)
+    ON_BN_CLICKED(IDC_POTION_NUMBER_REGION, &CKeyboardClickerDlg::OnSelectPotionNumberRegion)
+    ON_EN_CHANGE(IDC_POTION_NUMBER_INTERVAL, &CKeyboardClickerDlg::OnPotionSettingsChanged)
+    ON_CONTROL_RANGE(BN_CLICKED, IDC_POTION_BOTTLE_REGION_BASE + 0, IDC_POTION_BOTTLE_REGION_BASE + 1, &CKeyboardClickerDlg::OnSelectPotionBottleRegion)
+    ON_CONTROL_RANGE(BN_CLICKED, IDC_POTION_BOTTLE_SAMPLE_BASE + 0, IDC_POTION_BOTTLE_SAMPLE_BASE + 1, &CKeyboardClickerDlg::OnAddPotionSample)
+    ON_EN_CHANGE(IDC_POTION_BOTTLE_INTERVAL_BASE + 0, &CKeyboardClickerDlg::OnPotionSettingsChanged)
+    ON_EN_CHANGE(IDC_POTION_BOTTLE_INTERVAL_BASE + 1, &CKeyboardClickerDlg::OnPotionSettingsChanged)
+    ON_EN_CHANGE(IDC_POTION_BOTTLE_THRESHOLD_BASE + 0, &CKeyboardClickerDlg::OnPotionSettingsChanged)
+    ON_EN_CHANGE(IDC_POTION_BOTTLE_THRESHOLD_BASE + 1, &CKeyboardClickerDlg::OnPotionSettingsChanged)
     ON_CONTROL_RANGE(BN_CLICKED, IDC_DEBUFF_SAMPLE_BASE + 0, IDC_DEBUFF_SAMPLE_BASE + 3, &CKeyboardClickerDlg::OnAddDebuffSample)
     ON_NOTIFY(TCN_SELCHANGE, IDC_PAGE_TABS, &CKeyboardClickerDlg::OnPageTabChanged)
     ON_MESSAGE(WM_KEY_CAPTURED, &CKeyboardClickerDlg::OnKeyCaptured)
     ON_MESSAGE(WM_APP_ASYNC_STATUS, &CKeyboardClickerDlg::OnAsyncStatus)
     ON_MESSAGE(WM_APP_SKILL_WORKER_FINISHED, &CKeyboardClickerDlg::OnSkillWorkerFinished)
+    ON_MESSAGE(WM_APP_POTION_WORKER_FINISHED, &CKeyboardClickerDlg::OnPotionWorkerFinished)
     ON_MESSAGE(WM_APP_SHOUT_WORKER_FINISHED, &CKeyboardClickerDlg::OnShoutWorkerFinished)
 END_MESSAGE_MAP()
 
@@ -1287,11 +1453,16 @@ void CKeyboardClickerDlg::OnDestroy()
     SaveSettings();
     StopJobs();
     StopHornMonitoring();
+    StopPotionMonitoring();
     UnregisterHotKey(m_hWnd, HotkeyCaptureTarget);
     UnregisterAllShoutHotkeys();
     if (m_skillWorker.joinable())
     {
         m_skillWorker.join();
+    }
+    if (m_potionWorker.joinable())
+    {
+        m_potionWorker.join();
     }
     if (m_shoutWorker.joinable())
     {
@@ -1340,6 +1511,22 @@ void CKeyboardClickerDlg::OnTimer(UINT_PTR nIDEvent)
         if (m_hornState.enabled)
         {
             SetTimer(HornTimerId, NextSkillMonitorDelay(), nullptr);
+        }
+        return;
+    }
+
+    if (nIDEvent == PotionTimerId)
+    {
+        if (!m_potionState.enabled)
+        {
+            StopPotionMonitoring();
+            return;
+        }
+
+        LaunchPotionDetection(true);
+        if (m_potionState.enabled)
+        {
+            SetTimer(PotionTimerId, NextPotionMonitorDelay(), nullptr);
         }
         return;
     }
@@ -1508,17 +1695,33 @@ void CKeyboardClickerDlg::OnAdvancedFeatures()
         return;
     }
 
-    SetStatus(_T("正在注册大漠高级功能..."));
+    SetStatus(_T("正在注册 Fairy 高级功能..."));
     if (RegisterDmPlugin())
     {
         m_advancedInitialized = true;
+        SaveAdvancedPasswordAuthorization();
         m_activePage = 1;
         m_pageTabs.SetCurSel(m_activePage);
         StopHornMonitoring();
         LayoutControls();
+        if (m_potionState.enabled)
+        {
+            if (ValidatePotionMonitoringSettings())
+            {
+                UpdatePotionMonitoringTimer();
+            }
+            else
+            {
+                StopPotionMonitoring();
+            }
+        }
         SaveSettings();
         SetStatus(_T("高级功能初始化完成。点击“开始”后才会自动检测。"));
+        return;
     }
+
+    ClearAdvancedPasswordAuthorization();
+    SetStatus(_T("高级功能注册失败，已清除高级功能密码缓存；再次点击“高级功能”可重新输入密码。"));
 }
 
 void CKeyboardClickerDlg::OnToggleSkillMonitoring()
@@ -1730,6 +1933,117 @@ void CKeyboardClickerDlg::OnSkillDebuffChanged(UINT nID)
     SaveSettings();
 }
 
+void CKeyboardClickerDlg::OnPotionEnabledChanged()
+{
+    const bool enabled = m_potionEnabledCheck.GetCheck() == BST_CHECKED;
+    if (!enabled)
+    {
+        StopPotionMonitoring();
+        SaveSettings();
+        SetStatus(_T("数字药品检测已停止。"));
+        return;
+    }
+
+    if (!m_advancedInitialized)
+    {
+        m_potionEnabledCheck.SetCheck(BST_UNCHECKED);
+        m_potionState.enabled = false;
+        SetStatus(_T("请先点击底部“高级功能”完成 Fairy 初始化。"));
+        SaveSettings();
+        return;
+    }
+
+    m_potionState.enabled = true;
+    if (!ValidatePotionMonitoringSettings())
+    {
+        StopPotionMonitoring();
+        SaveSettings();
+        return;
+    }
+
+    UpdatePotionMonitoringTimer();
+    SaveSettings();
+}
+
+void CKeyboardClickerDlg::OnPotionSettingsChanged()
+{
+    if (!GetSafeHwnd())
+    {
+        return;
+    }
+
+    m_potionState.numberIntervalMs = ReadPotionNumberIntervalMs();
+    if (m_potionState.enabled && m_advancedInitialized)
+    {
+        SetTimer(PotionTimerId, NextPotionMonitorDelay(), nullptr);
+    }
+}
+
+void CKeyboardClickerDlg::OnSelectPotionNumberRegion()
+{
+    CRect region;
+    SetStatus(_T("请拖拽数字识别区域，按 Esc 可取消。"));
+    if (!SelectScreenRegion(region))
+    {
+        SetStatus(_T("数字区域选择已取消。"));
+        return;
+    }
+
+    m_potionState.numberRegion = region;
+    m_potionState.hasNumberRegion = true;
+    SetRegionStatus(m_potionNumberRegionLabel, true, region, _T("数字范围: 未设置"));
+
+    CString message;
+    message.Format(_T("数字区域已设置: %ld,%ld - %ld,%ld"), region.left, region.top, region.right, region.bottom);
+    SetStatus(message);
+    SaveSettings();
+}
+
+void CKeyboardClickerDlg::OnSelectPotionBottleRegion(UINT nID)
+{
+    const int offset = static_cast<int>(nID) - IDC_POTION_BOTTLE_REGION_BASE;
+    if (offset < 0 || offset >= static_cast<int>(m_potionState.bottles.size()))
+    {
+        return;
+    }
+
+    const size_t index = static_cast<size_t>(offset);
+    CRect region;
+    CString prompt;
+    prompt.Format(_T("请拖拽 %s 图片识别区域，按 Esc 可取消。"), PotionDefinitions[index].label);
+    SetStatus(prompt);
+    if (!SelectScreenRegion(region))
+    {
+        CString message;
+        message.Format(_T("%s 区域选择已取消。"), PotionDefinitions[index].label);
+        SetStatus(message);
+        return;
+    }
+
+    m_potionState.bottles[index].region = region;
+    m_potionState.bottles[index].hasRegion = true;
+    CString emptyText;
+    emptyText.Format(_T("%s范围: 未设置"), PotionDefinitions[index].label);
+    SetRegionStatus(m_potionControls[index].regionLabel, true, region, emptyText);
+
+    CString message;
+    message.Format(_T("%s 区域已设置: %ld,%ld - %ld,%ld"), PotionDefinitions[index].label, region.left, region.top, region.right, region.bottom);
+    SetStatus(message);
+    SaveSettings();
+}
+
+void CKeyboardClickerDlg::OnAddPotionSample(UINT nID)
+{
+    const int offset = static_cast<int>(nID) - IDC_POTION_BOTTLE_SAMPLE_BASE;
+    if (offset < 0 || offset >= static_cast<int>(m_potionControls.size()))
+    {
+        return;
+    }
+
+    const size_t index = static_cast<size_t>(offset);
+    AddPictureSamples(GetPotionSampleDirectory(index), PotionDefinitions[index].label);
+}
+
 void CKeyboardClickerDlg::OnAddDebuffSample(UINT nID)
 {
     const int controlOffset = static_cast<int>(nID) - IDC_DEBUFF_SAMPLE_BASE;
@@ -1839,6 +2153,16 @@ LRESULT CKeyboardClickerDlg::OnKeyCaptured(WPARAM wParam, LPARAM lParam)
         return 0;
     }
 
+    if (controlId >= IDC_POTION_BOTTLE_KEY_BASE && controlId < IDC_POTION_BOTTLE_KEY_BASE + static_cast<int>(m_potionControls.size()))
+    {
+        const size_t index = static_cast<size_t>(controlId - IDC_POTION_BOTTLE_KEY_BASE);
+        SaveSettings();
+        CString message;
+        message.Format(lParam == 0 ? _T("%s 按键已清空。") : _T("%s 按键已设置。"), PotionDefinitions[index].label);
+        SetStatus(message);
+        return 0;
+    }
+
     UNREFERENCED_PARAMETER(lParam);
     SaveSettings();
     SetStatus(_T("按键已获取。设置间隔后点击开始。"));
@@ -1945,6 +2269,77 @@ LRESULT CKeyboardClickerDlg::OnSkillWorkerFinished(WPARAM wParam, LPARAM lParam)
     {
         SaveSettings();
     }
+    JoinFinishedAsyncWorkers();
+    return 0;
+}
+
+LRESULT CKeyboardClickerDlg::OnPotionWorkerFinished(WPARAM wParam, LPARAM lParam)
+{
+    UNREFERENCED_PARAMETER(wParam);
+    std::unique_ptr<PotionDetectionResult> result(reinterpret_cast<PotionDetectionResult*>(lParam));
+    if (!result)
+    {
+        return 0;
+    }
+
+    const ULONGLONG now = ::GetTickCount64();
+    for (const CString& diagnostic : result->diagnostics)
+    {
+        AppendDebugText(diagnostic);
+    }
+    for (const PotionAvailabilityUpdate& update : result->availabilityUpdates)
+    {
+        if (update.index < m_potionState.bottles.size())
+        {
+            m_potionState.bottles[update.index].available = update.available;
+            m_potionState.bottles[update.index].hasAvailability = true;
+            m_potionState.bottles[update.index].lastDetectTick = update.tick;
+        }
+    }
+    if (result->numberRead)
+    {
+        m_potionState.hasLastNumber = true;
+        m_potionState.lastNumber = result->number;
+        m_potionState.lastNumberTick = now;
+    }
+
+    if (result->success)
+    {
+        if (!m_potionState.enabled)
+        {
+            SetStatus(_T("数字药品检测已停止，本次后台结果已忽略。"));
+        }
+        else if (result->inputAlreadySent || (PrepareForegroundTarget() && SendInputKey(result->keyVk)))
+        {
+            if (result->index < m_potionState.bottles.size())
+            {
+                m_potionState.bottles[result->index].lastPressTick = now;
+                m_potionState.bottles[result->index].available = false;
+                m_potionState.bottles[result->index].hasAvailability = true;
+            }
+            CString message;
+            if (!result->message.IsEmpty())
+            {
+                message = result->message;
+            }
+            else
+            {
+                message.Format(_T("数字药品：当前数字 %u，已使用 %s。"), static_cast<unsigned>(result->number), PotionDefinitions[result->index].label);
+            }
+            SetStatus(message);
+        }
+        else
+        {
+            SetStatus(_T("数字药品已满足条件，但发送按键失败。"));
+        }
+    }
+    else if (!result->message.IsEmpty())
+    {
+        SetStatus(result->message);
+    }
+
+    UpdatePotionStatusLabels();
+    SaveSettings();
     JoinFinishedAsyncWorkers();
     return 0;
 }
@@ -2185,6 +2580,10 @@ void CKeyboardClickerDlg::LayoutControls()
     {
         LayoutAdvancedPage();
     }
+    else if (m_activePage == 2)
+    {
+        LayoutPotionPage();
+    }
     else
     {
         LayoutBasePage();
@@ -2230,6 +2629,7 @@ void CKeyboardClickerDlg::LayoutAdvancedPage()
     const BaseLayoutMetrics layoutMetrics = CalculateBaseLayoutMetrics(client);
 
     ShowBasePageControls(SW_HIDE);
+    ShowPotionPageControls(SW_HIDE);
     ShowAdvancedPageControls(SW_SHOW);
     UpdateSkillMonitorButtonText();
 
@@ -2304,6 +2704,66 @@ void CKeyboardClickerDlg::LayoutAdvancedPage()
     UNREFERENCED_PARAMETER(groupWidth);
 }
 
+void CKeyboardClickerDlg::LayoutPotionPage()
+{
+    CRect client;
+    GetClientRect(&client);
+    const int margin = LayoutMargin;
+    const int gap = LayoutGap;
+    const int width = client.Width();
+    const int groupWidth = width - margin * 2;
+    const int innerLeft = margin + 14;
+    const int innerRight = width - margin - 14;
+    const int contentTop = margin + AdvancedTabHeight + gap;
+    const BaseLayoutMetrics layoutMetrics = CalculateBaseLayoutMetrics(client);
+
+    ShowBasePageControls(SW_HIDE);
+    ShowAdvancedPageControls(SW_HIDE);
+    ShowPotionPageControls(SW_SHOW);
+
+    if (!m_advancedInitialized)
+    {
+        m_advancedHintLabel.ShowWindow(SW_SHOW);
+        m_advancedHintLabel.SetWindowText(_T("请先点击底部“高级功能”完成初始化；初始化前不会显示数字药品设置项。"));
+        m_advancedHintLabel.MoveWindow(innerLeft, contentTop + 6, innerRight - innerLeft, AdvancedHintHeight);
+        UNREFERENCED_PARAMETER(groupWidth);
+        return;
+    }
+
+    const int groupTop = contentTop + 10;
+    const int groupBottom = layoutMetrics.statusY - gap;
+    const int groupHeight = (std::max)(220, groupBottom - groupTop);
+    m_potionGroup.MoveWindow(margin, groupTop, groupWidth, groupHeight);
+
+    const int topY = groupTop + 26;
+    m_potionEnabledCheck.MoveWindow(innerLeft, topY, 86, 22);
+    m_potionNumberRegionButton.MoveWindow(innerLeft + 96, topY - 1, 92, 24);
+    m_potionNumberIntervalLabel.MoveWindow(innerLeft + 206, topY + 4, 84, 18);
+    m_potionNumberIntervalEdit.MoveWindow(innerLeft + 294, topY, 58, 22);
+    m_potionNumberRegionLabel.MoveWindow(innerLeft, topY + 32, innerRight - innerLeft, 18);
+    m_potionStatusLabel.MoveWindow(innerLeft, topY + 56, innerRight - innerLeft, 18);
+
+    const int rowTop = topY + 92;
+    const int rowHeight = 92;
+    for (size_t i = 0; i < m_potionControls.size(); ++i)
+    {
+        PotionControls& controls = m_potionControls[i];
+        const int y = rowTop + static_cast<int>(i) * rowHeight;
+        controls.regionButton.MoveWindow(innerLeft, y, 94, 24);
+        controls.sampleButton.MoveWindow(innerLeft + 104, y, 94, 24);
+        controls.intervalLabel.MoveWindow(innerLeft + 216, y + 4, 84, 18);
+        controls.intervalEdit.MoveWindow(innerLeft + 304, y, 58, 22);
+        controls.keyLabel.MoveWindow(innerLeft + 380, y + 4, 44, 18);
+        controls.keyEdit.MoveWindow(innerLeft + 426, y, 62, 22);
+        controls.thresholdLabel.MoveWindow(innerLeft + 506, y + 4, 66, 18);
+        controls.thresholdEdit.MoveWindow(innerLeft + 574, y, 58, 22);
+        controls.regionLabel.MoveWindow(innerLeft, y + 32, innerRight - innerLeft, 18);
+        controls.availabilityLabel.MoveWindow(innerLeft, y + 56, innerRight - innerLeft, 18);
+    }
+
+    UNREFERENCED_PARAMETER(groupWidth);
+}
+
 void CKeyboardClickerDlg::LayoutBasePage()
 {
     CRect client;
@@ -2315,6 +2775,7 @@ void CKeyboardClickerDlg::LayoutBasePage()
     const int innerRight = width - margin - 14;
 
     ShowAdvancedPageControls(SW_HIDE);
+    ShowPotionPageControls(SW_HIDE);
     ShowBasePageControls(SW_SHOW);
 
     const BaseLayoutMetrics metrics = CalculateBaseLayoutMetrics(client);
@@ -2557,6 +3018,7 @@ void CKeyboardClickerDlg::InitializeAdvancedControls()
     m_pageTabs.Create(WS_CHILD | WS_TABSTOP | TCS_TABS, CRect(0, 0, 0, 0), this, IDC_PAGE_TABS);
     m_pageTabs.InsertItem(0, _T("基础功能"));
     m_pageTabs.InsertItem(1, _T("高级功能"));
+    m_pageTabs.InsertItem(2, _T("数字药品"));
     m_pageTabs.SetCurSel(0);
     m_pageTabs.SetFont(font);
     m_pageTabs.ShowWindow(SW_SHOW);
@@ -2581,6 +3043,36 @@ void CKeyboardClickerDlg::InitializeAdvancedControls()
     m_debuffRegionLabel.Create(_T("Debuff范围: 未设置"), labelStyle, CRect(0, 0, 0, 0), this);
     m_hornRegionLabel.Create(_T("号角范围: 未设置"), labelStyle, CRect(0, 0, 0, 0), this);
     m_debuffSummaryLabel.Create(_T("Debuff: 未选择"), labelStyle, CRect(0, 0, 0, 0), this);
+
+    m_potionGroup.Create(_T("数字药品"), WS_CHILD | BS_GROUPBOX, CRect(0, 0, 0, 0), this);
+    m_potionEnabledCheck.Create(_T("检测数字"), checkStyle, CRect(0, 0, 0, 0), this, IDC_POTION_ENABLED);
+    m_potionNumberRegionButton.Create(_T("数字范围"), buttonStyle, CRect(0, 0, 0, 0), this, IDC_POTION_NUMBER_REGION);
+    m_potionNumberRegionLabel.Create(_T("数字范围: 未设置"), labelStyle, CRect(0, 0, 0, 0), this);
+    m_potionNumberIntervalLabel.Create(_T("数字检测(ms):"), labelStyle, CRect(0, 0, 0, 0), this);
+    m_potionNumberIntervalEdit.Create(numberEditStyle, CRect(0, 0, 0, 0), this, IDC_POTION_NUMBER_INTERVAL);
+    m_potionNumberIntervalEdit.SetWindowText(_T("200"));
+    m_potionStatusLabel.Create(_T("数字: 未检测；药品: 未检测"), labelStyle, CRect(0, 0, 0, 0), this);
+    for (size_t i = 0; i < m_potionControls.size(); ++i)
+    {
+        PotionControls& controls = m_potionControls[i];
+        CString buttonText;
+        buttonText.Format(_T("%s范围"), PotionDefinitions[i].label);
+        controls.regionButton.Create(buttonText, buttonStyle, CRect(0, 0, 0, 0), this, IDC_POTION_BOTTLE_REGION_BASE + static_cast<int>(i));
+        buttonText.Format(_T("%s样本"), PotionDefinitions[i].label);
+        controls.sampleButton.Create(buttonText, buttonStyle, CRect(0, 0, 0, 0), this, IDC_POTION_BOTTLE_SAMPLE_BASE + static_cast<int>(i));
+        CString labelText;
+        labelText.Format(_T("%s范围: 未设置"), PotionDefinitions[i].label);
+        controls.regionLabel.Create(labelText, labelStyle, CRect(0, 0, 0, 0), this);
+        controls.intervalLabel.Create(_T("图片检测(ms):"), labelStyle, CRect(0, 0, 0, 0), this);
+        controls.intervalEdit.Create(numberEditStyle, CRect(0, 0, 0, 0), this, IDC_POTION_BOTTLE_INTERVAL_BASE + static_cast<int>(i));
+        controls.intervalEdit.SetWindowText(_T("500"));
+        controls.keyLabel.Create(_T("按键:"), labelStyle, CRect(0, 0, 0, 0), this);
+        controls.keyEdit.Create(readOnlyEditStyle, CRect(0, 0, 0, 0), this, IDC_POTION_BOTTLE_KEY_BASE + static_cast<int>(i));
+        controls.thresholdLabel.Create(_T("数字低于:"), labelStyle, CRect(0, 0, 0, 0), this);
+        controls.thresholdEdit.Create(numberEditStyle, CRect(0, 0, 0, 0), this, IDC_POTION_BOTTLE_THRESHOLD_BASE + static_cast<int>(i));
+        controls.thresholdEdit.SetWindowText(_T("0"));
+        controls.availabilityLabel.Create(_T("状态: 未检测"), labelStyle, CRect(0, 0, 0, 0), this);
+    }
 
     for (size_t i = 0; i < m_skillControls.size(); ++i)
     {
@@ -2630,6 +3122,26 @@ void CKeyboardClickerDlg::InitializeAdvancedControls()
     m_debuffRegionLabel.SetFont(font);
     m_hornRegionLabel.SetFont(font);
     m_debuffSummaryLabel.SetFont(font);
+    m_potionGroup.SetFont(font);
+    m_potionEnabledCheck.SetFont(font);
+    m_potionNumberRegionButton.SetFont(font);
+    m_potionNumberRegionLabel.SetFont(font);
+    m_potionNumberIntervalLabel.SetFont(font);
+    m_potionNumberIntervalEdit.SetFont(font);
+    m_potionStatusLabel.SetFont(font);
+    for (auto& controls : m_potionControls)
+    {
+        controls.regionButton.SetFont(font);
+        controls.sampleButton.SetFont(font);
+        controls.regionLabel.SetFont(font);
+        controls.intervalLabel.SetFont(font);
+        controls.intervalEdit.SetFont(font);
+        controls.keyLabel.SetFont(font);
+        controls.keyEdit.SetFont(font);
+        controls.thresholdLabel.SetFont(font);
+        controls.thresholdEdit.SetFont(font);
+        controls.availabilityLabel.SetFont(font);
+    }
 
     for (auto& controls : m_skillControls)
     {
@@ -2666,6 +3178,7 @@ void CKeyboardClickerDlg::InitializeAdvancedControls()
 
     UpdateDebuffSummary();
     ShowAdvancedPageControls(SW_HIDE);
+    ShowPotionPageControls(SW_HIDE);
 }
 
 void CKeyboardClickerDlg::ShowShoutActionRows()
@@ -2790,6 +3303,31 @@ void CKeyboardClickerDlg::ShowAdvancedPageControls(int show)
     }
 }
 
+void CKeyboardClickerDlg::ShowPotionPageControls(int show)
+{
+    const int potionShow = show == SW_SHOW && m_advancedInitialized ? SW_SHOW : SW_HIDE;
+    m_potionGroup.ShowWindow(potionShow);
+    m_potionEnabledCheck.ShowWindow(potionShow);
+    m_potionNumberRegionButton.ShowWindow(potionShow);
+    m_potionNumberRegionLabel.ShowWindow(potionShow);
+    m_potionNumberIntervalLabel.ShowWindow(potionShow);
+    m_potionNumberIntervalEdit.ShowWindow(potionShow);
+    m_potionStatusLabel.ShowWindow(potionShow);
+    for (auto& controls : m_potionControls)
+    {
+        controls.regionButton.ShowWindow(potionShow);
+        controls.sampleButton.ShowWindow(potionShow);
+        controls.regionLabel.ShowWindow(potionShow);
+        controls.intervalLabel.ShowWindow(potionShow);
+        controls.intervalEdit.ShowWindow(potionShow);
+        controls.keyLabel.ShowWindow(potionShow);
+        controls.keyEdit.ShowWindow(potionShow);
+        controls.thresholdLabel.ShowWindow(potionShow);
+        controls.thresholdEdit.ShowWindow(potionShow);
+        controls.availabilityLabel.ShowWindow(potionShow);
+    }
+}
+
 void CKeyboardClickerDlg::UpdateAdvancedControls()
 {
     m_hornEnabledCheck.SetCheck(m_hornState.enabled ? BST_CHECKED : BST_UNCHECKED);
@@ -2833,6 +3371,25 @@ void CKeyboardClickerDlg::UpdateAdvancedControls()
     }
     SetRegionStatus(m_debuffRegionLabel, m_hornState.hasDebuffRegion, m_hornState.debuffRegion, _T("Debuff范围: 未设置"));
     UpdateDebuffSummary();
+
+    m_potionEnabledCheck.SetCheck(m_potionState.enabled ? BST_CHECKED : BST_UNCHECKED);
+    CString numberIntervalText;
+    numberIntervalText.Format(_T("%u"), static_cast<unsigned>(m_potionState.numberIntervalMs < MinPotionIntervalMs ? DefaultPotionNumberIntervalMs : m_potionState.numberIntervalMs));
+    m_potionNumberIntervalEdit.SetWindowText(numberIntervalText);
+    SetRegionStatus(m_potionNumberRegionLabel, m_potionState.hasNumberRegion, m_potionState.numberRegion, _T("数字范围: 未设置"));
+    for (size_t i = 0; i < m_potionControls.size(); ++i)
+    {
+        if (GetWindowTextString(m_potionControls[i].intervalEdit).IsEmpty())
+        {
+            CString bottleIntervalText;
+            bottleIntervalText.Format(_T("%u"), static_cast<unsigned>(DefaultPotionBottleIntervalMs));
+            m_potionControls[i].intervalEdit.SetWindowText(bottleIntervalText);
+        }
+        CString emptyText;
+        emptyText.Format(_T("%s范围: 未设置"), PotionDefinitions[i].label);
+        SetRegionStatus(m_potionControls[i].regionLabel, m_potionState.bottles[i].hasRegion, m_potionState.bottles[i].region, emptyText);
+    }
+    UpdatePotionStatusLabels();
 }
 
 void CKeyboardClickerDlg::UpdateSkillMonitorButtonText()
@@ -2991,8 +3548,9 @@ void CKeyboardClickerDlg::LoadSettings()
         m_shoutControls[i].cooldownSkillKeyEdit.SetCapturedKey(cooldownKey);
     }
 
-    m_activePage = app->GetProfileInt(SettingsSection, _T("ActivePage"), 0) == 1 ? 1 : 0;
-    m_advancedAuthorized = app->GetProfileInt(SettingsSection, _T("AdvancedAuthorized"), 0) != 0;
+    const int savedActivePage = app->GetProfileInt(SettingsSection, _T("ActivePage"), 0);
+    m_activePage = savedActivePage >= 0 && savedActivePage <= 2 ? savedActivePage : 0;
+    m_advancedAuthorized = app->GetProfileString(SettingsSection, _T("AdvancedPassword"), _T("")) == AdvancedFeaturePassword;
     m_hornState.enabled = false;
     m_hornState.intervalMs = static_cast<UINT>(app->GetProfileInt(SettingsSection, _T("HornInterval"), 500));
     if (m_hornState.intervalMs < 50)
@@ -3073,6 +3631,50 @@ void CKeyboardClickerDlg::LoadSettings()
         name.Format(_T("HornDebuff%u"), static_cast<unsigned>(i));
         m_hornState.debuffs[i] = app->GetProfileInt(SettingsSection, name, 0) != 0;
     }
+
+    // 数字药品检测属于运行时开关，不从配置恢复，避免启动后自动开始检测。
+    m_potionState.enabled = false;
+    m_potionState.hasNumberRegion = app->GetProfileInt(SettingsSection, _T("PotionHasNumberRegion"), 0) != 0;
+    m_potionState.numberRegion.left = app->GetProfileInt(SettingsSection, _T("PotionNumberLeft"), 0);
+    m_potionState.numberRegion.top = app->GetProfileInt(SettingsSection, _T("PotionNumberTop"), 0);
+    m_potionState.numberRegion.right = app->GetProfileInt(SettingsSection, _T("PotionNumberRight"), 0);
+    m_potionState.numberRegion.bottom = app->GetProfileInt(SettingsSection, _T("PotionNumberBottom"), 0);
+    m_potionState.numberIntervalMs = static_cast<UINT>(app->GetProfileInt(SettingsSection, _T("PotionNumberInterval"), DefaultPotionNumberIntervalMs));
+    if (m_potionState.numberIntervalMs < MinPotionIntervalMs)
+    {
+        m_potionState.numberIntervalMs = DefaultPotionNumberIntervalMs;
+    }
+    CString potionNumberIntervalText;
+    potionNumberIntervalText.Format(_T("%u"), static_cast<unsigned>(m_potionState.numberIntervalMs));
+    m_potionNumberIntervalEdit.SetWindowText(potionNumberIntervalText);
+
+    for (size_t i = 0; i < m_potionControls.size(); ++i)
+    {
+        const CString prefix(PotionDefinitions[i].settingsPrefix);
+        m_potionState.bottles[i].hasRegion = app->GetProfileInt(SettingsSection, prefix + _T("HasRegion"), 0) != 0;
+        m_potionState.bottles[i].region.left = app->GetProfileInt(SettingsSection, prefix + _T("RegionLeft"), 0);
+        m_potionState.bottles[i].region.top = app->GetProfileInt(SettingsSection, prefix + _T("RegionTop"), 0);
+        m_potionState.bottles[i].region.right = app->GetProfileInt(SettingsSection, prefix + _T("RegionRight"), 0);
+        m_potionState.bottles[i].region.bottom = app->GetProfileInt(SettingsSection, prefix + _T("RegionBottom"), 0);
+
+        const UINT key = static_cast<UINT>(app->GetProfileInt(SettingsSection, prefix + _T("Key"), 0));
+        m_potionControls[i].keyEdit.SetCapturedKey(key);
+
+        UINT interval = static_cast<UINT>(app->GetProfileInt(SettingsSection, prefix + _T("Interval"), DefaultPotionBottleIntervalMs));
+        if (interval < MinPotionIntervalMs)
+        {
+            interval = DefaultPotionBottleIntervalMs;
+        }
+        CString intervalText;
+        intervalText.Format(_T("%u"), static_cast<unsigned>(interval));
+        m_potionControls[i].intervalEdit.SetWindowText(intervalText);
+
+        const UINT threshold = static_cast<UINT>(app->GetProfileInt(SettingsSection, prefix + _T("Threshold"), 0));
+        CString thresholdText;
+        thresholdText.Format(_T("%u"), static_cast<unsigned>(threshold));
+        m_potionControls[i].thresholdEdit.SetWindowText(thresholdText);
+    }
+
     CString intervalText;
     intervalText.Format(_T("%u"), static_cast<unsigned>(m_hornState.intervalMs));
     m_hornIntervalEdit.SetWindowText(intervalText);
@@ -3122,7 +3724,7 @@ void CKeyboardClickerDlg::SaveSettings() const
     }
 
     app->WriteProfileInt(SettingsSection, _T("ActivePage"), m_activePage);
-    app->WriteProfileInt(SettingsSection, _T("AdvancedAuthorized"), m_advancedAuthorized ? 1 : 0);
+    app->WriteProfileString(SettingsSection, _T("AdvancedPassword"), m_advancedAuthorized ? AdvancedFeaturePassword : _T(""));
     app->WriteProfileInt(SettingsSection, _T("HornEnabled"), 0);
     UINT hornInterval = 0;
     if (!ReadUIntFromWindow(m_hornIntervalEdit, hornInterval) || hornInterval < 50)
@@ -3182,6 +3784,31 @@ void CKeyboardClickerDlg::SaveSettings() const
         CString name;
         name.Format(_T("HornDebuff%u"), static_cast<unsigned>(i));
         app->WriteProfileInt(SettingsSection, name, m_hornState.debuffs[i] ? 1 : 0);
+    }
+
+    // 不保存数字药品检测启用状态；每次启动都需要用户手动勾选。
+    app->WriteProfileInt(SettingsSection, _T("PotionHasNumberRegion"), m_potionState.hasNumberRegion ? 1 : 0);
+    app->WriteProfileInt(SettingsSection, _T("PotionNumberLeft"), m_potionState.numberRegion.left);
+    app->WriteProfileInt(SettingsSection, _T("PotionNumberTop"), m_potionState.numberRegion.top);
+    app->WriteProfileInt(SettingsSection, _T("PotionNumberRight"), m_potionState.numberRegion.right);
+    app->WriteProfileInt(SettingsSection, _T("PotionNumberBottom"), m_potionState.numberRegion.bottom);
+    UINT potionNumberInterval = 0;
+    if (!ReadUIntFromWindow(m_potionNumberIntervalEdit, potionNumberInterval) || potionNumberInterval < MinPotionIntervalMs)
+    {
+        potionNumberInterval = m_potionState.numberIntervalMs < MinPotionIntervalMs ? DefaultPotionNumberIntervalMs : m_potionState.numberIntervalMs;
+    }
+    app->WriteProfileInt(SettingsSection, _T("PotionNumberInterval"), static_cast<int>(potionNumberInterval));
+    for (size_t i = 0; i < m_potionControls.size(); ++i)
+    {
+        const CString prefix(PotionDefinitions[i].settingsPrefix);
+        app->WriteProfileInt(SettingsSection, prefix + _T("HasRegion"), m_potionState.bottles[i].hasRegion ? 1 : 0);
+        app->WriteProfileInt(SettingsSection, prefix + _T("RegionLeft"), m_potionState.bottles[i].region.left);
+        app->WriteProfileInt(SettingsSection, prefix + _T("RegionTop"), m_potionState.bottles[i].region.top);
+        app->WriteProfileInt(SettingsSection, prefix + _T("RegionRight"), m_potionState.bottles[i].region.right);
+        app->WriteProfileInt(SettingsSection, prefix + _T("RegionBottom"), m_potionState.bottles[i].region.bottom);
+        app->WriteProfileString(SettingsSection, prefix + _T("Interval"), GetWindowTextString(m_potionControls[i].intervalEdit));
+        app->WriteProfileInt(SettingsSection, prefix + _T("Key"), static_cast<int>(m_potionControls[i].keyEdit.CapturedKey()));
+        app->WriteProfileString(SettingsSection, prefix + _T("Threshold"), GetWindowTextString(m_potionControls[i].thresholdEdit));
     }
 }
 
@@ -3594,33 +4221,47 @@ bool CKeyboardClickerDlg::RequestAdvancedPassword()
         return true;
     }
 
-    CAdvancedPasswordDialog dialog(this);
-    if (dialog.DoModal() != IDOK)
+    while (true)
     {
-        SetStatus(_T("高级功能需要通过密码验证后才能启用。"));
-        return false;
-    }
+        CAdvancedPasswordDialog dialog(this);
+        if (dialog.DoModal() != IDOK)
+        {
+            SetStatus(_T("高级功能需要输入正确密码后才能启用。"));
+            return false;
+        }
 
-    if (dialog.Password() != AdvancedFeaturePassword)
-    {
-        AfxMessageBox(_T("高级功能密码错误。"), MB_ICONWARNING);
-        SetStatus(_T("高级功能密码错误，已取消初始化。"));
-        return false;
-    }
+        if (dialog.Password() == AdvancedFeaturePassword)
+        {
+            SetStatus(_T("高级功能密码验证成功。"));
+            return true;
+        }
 
-    MarkAdvancedAuthorized();
-    SetStatus(_T("高级功能密码验证成功。"));
-    return true;
+        AfxMessageBox(_T("高级功能密码错误，请重新输入。"), MB_ICONWARNING);
+        SetStatus(_T("高级功能密码错误，请重新输入。"));
+    }
 }
 
-void CKeyboardClickerDlg::MarkAdvancedAuthorized()
+void CKeyboardClickerDlg::SaveAdvancedPasswordAuthorization()
 {
     m_advancedAuthorized = true;
 
     CWinApp* app = AfxGetApp();
     if (app != nullptr)
     {
-        app->WriteProfileInt(SettingsSection, _T("AdvancedAuthorized"), 1);
+        app->WriteProfileString(SettingsSection, _T("AdvancedPassword"), AdvancedFeaturePassword);
+        app->WriteProfileString(SettingsSection, _T("AdvancedAuthorized"), nullptr);
+    }
+}
+
+void CKeyboardClickerDlg::ClearAdvancedPasswordAuthorization()
+{
+    m_advancedAuthorized = false;
+
+    CWinApp* app = AfxGetApp();
+    if (app != nullptr)
+    {
+        app->WriteProfileString(SettingsSection, _T("AdvancedPassword"), _T(""));
+        app->WriteProfileString(SettingsSection, _T("AdvancedAuthorized"), nullptr);
     }
 }
 
@@ -3653,7 +4294,7 @@ bool CKeyboardClickerDlg::RegisterDmPlugin()
         if (m_dmModule == nullptr)
         {
             CString message;
-            message.Format(_T("加载 dm.dll 失败，错误码: %lu"), GetLastError());
+            message.Format(_T("加载 Fairy.dll 失败，错误码: %lu"), GetLastError());
             SetStatus(message);
             return false;
         }
@@ -3662,7 +4303,7 @@ bool CKeyboardClickerDlg::RegisterDmPlugin()
     auto getClassObject = reinterpret_cast<DllGetClassObjectProc>(GetProcAddress(m_dmModule, "DllGetClassObject"));
     if (getClassObject == nullptr)
     {
-        SetStatus(_T("dm.dll 中未找到 DllGetClassObject。"));
+        SetStatus(_T("Fairy.dll 中未找到 DllGetClassObject。"));
         ReleaseDmResources();
         return false;
     }
@@ -3766,6 +4407,18 @@ bool CKeyboardClickerDlg::InitializeDmResources(IDispatch* dm)
         return false;
     }
 
+    for (const PotionDefinition& potion : PotionDefinitions)
+    {
+        const CString potionFolder = CombinePath(resourceRoot, potion.sampleDirectory);
+        if (!EnsureDirectoryExists(potionFolder))
+        {
+            CString message;
+            message.Format(_T("创建%s样本目录失败: %s"), potion.label, static_cast<LPCTSTR>(potionFolder));
+            SetStatus(message);
+            return false;
+        }
+    }
+
     if (!EnsureDirectoryExists(dictFolder))
     {
         CString message;
@@ -3799,6 +4452,15 @@ bool CKeyboardClickerDlg::InitializeDmResources(IDispatch* dm)
         dictMessage.Format(_T("SetDict(0, %s) 返回 %ld。"), DmDefaultDictRelativePath, setDictResult);
         SetStatus(dictMessage);
         if (setDictResult != 1)
+        {
+            return false;
+        }
+
+        const long useDictResult = dmsoft->UseDict(0);
+        CString useDictMessage;
+        useDictMessage.Format(_T("UseDict(0) 返回 %ld。"), useDictResult);
+        SetStatus(useDictMessage);
+        if (useDictResult != 1)
         {
             return false;
         }
@@ -3862,11 +4524,26 @@ void CKeyboardClickerDlg::StopHornMonitoring()
     UpdateSkillMonitorButtonText();
 }
 
+void CKeyboardClickerDlg::StopPotionMonitoring()
+{
+    KillTimer(PotionTimerId);
+    m_potionState.enabled = false;
+    if (m_potionEnabledCheck.GetSafeHwnd())
+    {
+        m_potionEnabledCheck.SetCheck(BST_UNCHECKED);
+    }
+    UpdatePotionStatusLabels();
+}
+
 void CKeyboardClickerDlg::JoinFinishedAsyncWorkers()
 {
     if (!m_skillWorkerActive.load() && m_skillWorker.joinable())
     {
         m_skillWorker.join();
+    }
+    if (!m_potionWorkerActive.load() && m_potionWorker.joinable())
+    {
+        m_potionWorker.join();
     }
     if (!m_shoutWorkerActive.load() && m_shoutWorker.joinable())
     {
@@ -4013,6 +4690,113 @@ void CKeyboardClickerDlg::UpdateSkillMonitoringTimer()
     SetStatus(message);
 }
 
+UINT CKeyboardClickerDlg::ReadPotionNumberIntervalMs() const
+{
+    UINT interval = 0;
+    if (!ReadUIntFromWindow(m_potionNumberIntervalEdit, interval) || interval < MinPotionIntervalMs)
+    {
+        interval = DefaultPotionNumberIntervalMs;
+    }
+    return interval;
+}
+
+UINT CKeyboardClickerDlg::ReadPotionBottleIntervalMs(size_t index) const
+{
+    if (index >= m_potionControls.size())
+    {
+        return DefaultPotionBottleIntervalMs;
+    }
+
+    UINT interval = 0;
+    if (!ReadUIntFromWindow(m_potionControls[index].intervalEdit, interval) || interval < MinPotionIntervalMs)
+    {
+        interval = DefaultPotionBottleIntervalMs;
+    }
+    return interval;
+}
+
+bool CKeyboardClickerDlg::ReadPotionThreshold(size_t index, UINT& value) const
+{
+    value = 0;
+    if (index >= m_potionControls.size())
+    {
+        return false;
+    }
+    return ReadUIntFromWindow(m_potionControls[index].thresholdEdit, value);
+}
+
+UINT CKeyboardClickerDlg::NextPotionMonitorDelay() const
+{
+    if (m_potionWorkerActive.load())
+    {
+        return MinPotionIntervalMs;
+    }
+
+    const ULONGLONG now = ::GetTickCount64();
+    UINT bestDelay = ReadPotionNumberIntervalMs();
+    if (m_potionState.hasLastNumber && now >= m_potionState.lastNumberTick)
+    {
+        const ULONGLONG elapsed = now - m_potionState.lastNumberTick;
+        bestDelay = elapsed >= bestDelay ? 1 : static_cast<UINT>(bestDelay - elapsed);
+    }
+
+    for (size_t i = 0; i < m_potionControls.size(); ++i)
+    {
+        UINT threshold = 0;
+        if (!ReadPotionThreshold(i, threshold) || threshold == 0 || m_potionControls[i].keyEdit.CapturedKey() == 0)
+        {
+            continue;
+        }
+
+        const UINT interval = ReadPotionBottleIntervalMs(i);
+        UINT remaining = 1;
+        if (m_potionState.bottles[i].lastDetectTick != 0 && now >= m_potionState.bottles[i].lastDetectTick)
+        {
+            const ULONGLONG elapsed = now - m_potionState.bottles[i].lastDetectTick;
+            remaining = elapsed >= interval ? 1 : static_cast<UINT>(interval - elapsed);
+        }
+        bestDelay = (std::min)(bestDelay, remaining);
+
+        if (m_potionState.hasLastNumber && m_potionState.lastNumber < threshold && m_potionState.bottles[i].hasAvailability && m_potionState.bottles[i].available)
+        {
+            UINT pressRemaining = 1;
+            if (m_potionState.bottles[i].lastPressTick != 0 && now >= m_potionState.bottles[i].lastPressTick)
+            {
+                const ULONGLONG elapsed = now - m_potionState.bottles[i].lastPressTick;
+                pressRemaining = elapsed >= PotionPressCooldownMs ? 1 : static_cast<UINT>(PotionPressCooldownMs - elapsed);
+            }
+            bestDelay = (std::min)(bestDelay, pressRemaining);
+        }
+    }
+
+    return (std::max)(1U, bestDelay);
+}
+
+void CKeyboardClickerDlg::UpdatePotionMonitoringTimer()
+{
+    if (!m_potionState.enabled)
+    {
+        KillTimer(PotionTimerId);
+        UpdatePotionStatusLabels();
+        return;
+    }
+
+    if (!m_advancedInitialized)
+    {
+        StopPotionMonitoring();
+        SetStatus(_T("数字药品检测已停止：高级功能未初始化。"));
+        return;
+    }
+
+    m_potionState.numberIntervalMs = ReadPotionNumberIntervalMs();
+    SetTimer(PotionTimerId, NextPotionMonitorDelay(), nullptr);
+    UpdatePotionStatusLabels();
+
+    CString message;
+    message.Format(_T("数字药品检测已开始，数字颜色=%s，下一轮约 %u ms。"), DmNumberOcrColor, static_cast<unsigned>(NextPotionMonitorDelay()));
+    SetStatus(message);
+}
+
 bool CKeyboardClickerDlg::DetectSkillOnce(size_t index)
 {
     if (index >= m_skillStates.size())
@@ -4144,12 +4928,12 @@ bool CKeyboardClickerDlg::LaunchSkillDetection(const std::vector<size_t>& order,
 
     if (task.dmDllPath.IsEmpty())
     {
-        SetStatus(_T("未找到 dm.dll，无法启动后台识图。"));
+        SetStatus(_T("未找到 Fairy.dll，无法启动后台识图。"));
         return false;
     }
     if (task.resourceRoot.IsEmpty())
     {
-        SetStatus(_T("无法定位大漠资源根目录。"));
+        SetStatus(_T("无法定位 Fairy 资源根目录。"));
         return false;
     }
 
@@ -4442,6 +5226,263 @@ bool CKeyboardClickerDlg::LaunchSkillDetection(const std::vector<size_t>& order,
     return true;
 }
 
+bool CKeyboardClickerDlg::LaunchPotionDetection(bool respectIntervals)
+{
+    if (m_potionWorkerActive.load())
+    {
+        return false;
+    }
+
+    if (!ValidatePotionMonitoringSettings())
+    {
+        if (respectIntervals)
+        {
+            StopPotionMonitoring();
+        }
+        return false;
+    }
+
+    JoinFinishedAsyncWorkers();
+
+    PotionDetectionTask task;
+    task.targetHwnd = m_targetHwnd;
+    task.dmDllPath = ResolveDmDllPath();
+    task.resourceRoot = GetDmResourceRootForUse();
+    task.similarity = ReadHornSimilarity();
+    task.numberIntervalMs = ReadPotionNumberIntervalMs();
+    task.dispatchTick = ::GetTickCount64();
+    task.numberRegion = m_potionState.numberRegion;
+    task.hasCachedNumber = m_potionState.hasLastNumber;
+    task.cachedNumber = m_potionState.lastNumber;
+
+    if (task.dmDllPath.IsEmpty())
+    {
+        SetStatus(_T("未找到 Fairy.dll，无法启动数字药品检测。"));
+        return false;
+    }
+    if (task.resourceRoot.IsEmpty())
+    {
+        SetStatus(_T("无法定位 Fairy 资源根目录。"));
+        return false;
+    }
+
+    task.readNumberDue = !m_potionState.hasLastNumber
+        || task.dispatchTick < m_potionState.lastNumberTick
+        || task.dispatchTick - m_potionState.lastNumberTick >= task.numberIntervalMs;
+
+    bool hasDueBottleDetection = false;
+    bool hasCachedReadyAction = false;
+    for (size_t i = 0; i < m_potionControls.size(); ++i)
+    {
+        UINT threshold = 0;
+        if (!ReadPotionThreshold(i, threshold) || threshold == 0)
+        {
+            continue;
+        }
+
+        const UINT keyVk = m_potionControls[i].keyEdit.CapturedKey();
+        if (keyVk == 0)
+        {
+            continue;
+        }
+
+        PotionDetectionItem item;
+        item.index = i;
+        item.keyVk = keyVk;
+        item.threshold = threshold;
+        item.detectIntervalMs = ReadPotionBottleIntervalMs(i);
+        item.region = m_potionState.bottles[i].region;
+        item.pictures = BuildPotionPictureList(i);
+        item.cachedAvailable = m_potionState.bottles[i].available;
+        item.hasCachedAvailability = m_potionState.bottles[i].hasAvailability;
+        item.lastDetectTick = m_potionState.bottles[i].lastDetectTick;
+        item.lastPressTick = m_potionState.bottles[i].lastPressTick;
+        item.detectDue = !item.hasCachedAvailability
+            || task.dispatchTick < item.lastDetectTick
+            || task.dispatchTick - item.lastDetectTick >= item.detectIntervalMs;
+        hasDueBottleDetection = hasDueBottleDetection || item.detectDue;
+
+        const bool pressCooldownReady = item.lastPressTick == 0
+            || task.dispatchTick < item.lastPressTick
+            || task.dispatchTick - item.lastPressTick >= PotionPressCooldownMs;
+        if (!task.readNumberDue && task.hasCachedNumber && task.cachedNumber < item.threshold && item.hasCachedAvailability && item.cachedAvailable && pressCooldownReady)
+        {
+            hasCachedReadyAction = true;
+        }
+
+        task.items.push_back(item);
+    }
+
+    if (!task.readNumberDue && !hasDueBottleDetection && !hasCachedReadyAction)
+    {
+        return false;
+    }
+
+    m_potionWorkerActive.store(true);
+    if (m_potionWorker.joinable())
+    {
+        m_potionWorker.join();
+    }
+
+    HWND hwnd = m_hWnd;
+    m_potionWorker = std::thread([this, hwnd, task]() {
+        std::unique_ptr<PotionDetectionResult> result(new PotionDetectionResult());
+
+        const HRESULT coResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        const bool comInitialized = SUCCEEDED(coResult);
+
+        HMODULE workerDmModule = nullptr;
+        IDispatch* workerDmObject = nullptr;
+        CString error;
+        if (!CreateWorkerDmObject(task.dmDllPath, task.resourceRoot, workerDmModule, workerDmObject, error))
+        {
+            result->message = error.IsEmpty() ? CString(_T("数字药品后台初始化失败。")) : error;
+            ReleaseWorkerDmObject(workerDmModule, workerDmObject);
+            if (comInitialized)
+            {
+                CoUninitialize();
+            }
+            m_potionWorkerActive.store(false);
+            if (!m_closing.load() && ::IsWindow(hwnd))
+            {
+                ::PostMessage(hwnd, WM_APP_POTION_WORKER_FINISHED, 0, reinterpret_cast<LPARAM>(result.release()));
+            }
+            return;
+        }
+
+        UINT number = task.cachedNumber;
+        if (task.readNumberDue)
+        {
+            result->attemptedNumberRead = true;
+            CString rawNumberText;
+            UINT parsedNumber = 0;
+            CString ocrError;
+            if (!WorkerDmOcrNumber(workerDmObject, task.numberRegion, task.similarity, rawNumberText, parsedNumber, ocrError))
+            {
+                result->message = ocrError.IsEmpty() ? CString(_T("数字 OCR 失败。")) : ocrError;
+                ReleaseWorkerDmObject(workerDmModule, workerDmObject);
+                if (comInitialized)
+                {
+                    CoUninitialize();
+                }
+                m_potionWorkerActive.store(false);
+                if (!m_closing.load() && ::IsWindow(hwnd))
+                {
+                    ::PostMessage(hwnd, WM_APP_POTION_WORKER_FINISHED, 0, reinterpret_cast<LPARAM>(result.release()));
+                }
+                return;
+            }
+
+            number = parsedNumber;
+            result->numberRead = true;
+            result->number = number;
+            result->rawNumberText = rawNumberText;
+        }
+        else if (task.hasCachedNumber)
+        {
+            result->number = number;
+        }
+        else
+        {
+            result->message = _T("数字药品：还没有可用的数字识别结果。");
+            ReleaseWorkerDmObject(workerDmModule, workerDmObject);
+            if (comInitialized)
+            {
+                CoUninitialize();
+            }
+            m_potionWorkerActive.store(false);
+            if (!m_closing.load() && ::IsWindow(hwnd))
+            {
+                ::PostMessage(hwnd, WM_APP_POTION_WORKER_FINISHED, 0, reinterpret_cast<LPARAM>(result.release()));
+            }
+            return;
+        }
+
+        const PotionDetectionItem* selectedItem = nullptr;
+        UINT selectedThreshold = UINT_MAX;
+        for (const PotionDetectionItem& item : task.items)
+        {
+            bool available = item.cachedAvailable;
+            bool hasAvailability = item.hasCachedAvailability;
+
+            if (item.detectDue)
+            {
+                CString findResult;
+                CString findError;
+                available = WorkerDmFindPicEx(workerDmObject, item.region, item.pictures, task.similarity, findResult, findError);
+                if (!findError.IsEmpty())
+                {
+                    result->diagnostics.push_back(findError);
+                }
+
+                PotionAvailabilityUpdate update;
+                update.index = item.index;
+                update.available = available;
+                update.tick = GetTickCount64();
+                result->availabilityUpdates.push_back(update);
+                hasAvailability = true;
+            }
+
+            if (!hasAvailability || !available || number >= item.threshold)
+            {
+                continue;
+            }
+
+            const bool pressCooldownReady = item.lastPressTick == 0
+                || task.dispatchTick < item.lastPressTick
+                || task.dispatchTick - item.lastPressTick >= PotionPressCooldownMs;
+            if (!pressCooldownReady)
+            {
+                continue;
+            }
+
+            if (selectedItem == nullptr || item.threshold < selectedThreshold || (item.threshold == selectedThreshold && item.index < selectedItem->index))
+            {
+                selectedItem = &item;
+                selectedThreshold = item.threshold;
+            }
+        }
+
+        if (selectedItem != nullptr)
+        {
+            result->success = true;
+            result->index = selectedItem->index;
+            result->keyVk = selectedItem->keyVk;
+            result->number = number;
+            if (WorkerPrepareForegroundTarget(task.targetHwnd) && WorkerSendInputKey(selectedItem->keyVk))
+            {
+                result->inputAlreadySent = true;
+                result->message.Format(_T("数字药品：当前数字 %u 低于 %u，已按下 %s。"),
+                    static_cast<unsigned>(number),
+                    static_cast<unsigned>(selectedItem->threshold),
+                    PotionDefinitions[selectedItem->index].label);
+            }
+            else
+            {
+                result->success = false;
+                result->inputFailed = true;
+                result->message.Format(_T("数字药品：当前数字 %u 满足 %s 条件，但发送按键失败。"),
+                    static_cast<unsigned>(number),
+                    PotionDefinitions[selectedItem->index].label);
+            }
+        }
+
+        ReleaseWorkerDmObject(workerDmModule, workerDmObject);
+        if (comInitialized)
+        {
+            CoUninitialize();
+        }
+
+        m_potionWorkerActive.store(false);
+        if (!m_closing.load() && ::IsWindow(hwnd))
+        {
+            ::PostMessage(hwnd, WM_APP_POTION_WORKER_FINISHED, 0, reinterpret_cast<LPARAM>(result.release()));
+        }
+    });
+
+    return true;
+}
+
 bool CKeyboardClickerDlg::AnyConfiguredDebuffFound()
 {
     if (!m_hornState.hasDebuffRegion)
@@ -4569,7 +5610,7 @@ bool CKeyboardClickerDlg::ValidateAdvancedSkillSettings(size_t index, CString& s
     const CString root = GetDmResourceRootForUse();
     if (root.IsEmpty())
     {
-        SetStatus(_T("无法定位大漠资源根目录。"));
+        SetStatus(_T("无法定位 Fairy 资源根目录。"));
         return false;
     }
 
@@ -4642,7 +5683,7 @@ bool CKeyboardClickerDlg::ValidateSkillIconSettings(size_t index, CString& skill
     const CString root = GetDmResourceRootForUse();
     if (root.IsEmpty())
     {
-        SetStatus(_T("无法定位大漠资源根目录。"));
+        SetStatus(_T("无法定位 Fairy 资源根目录。"));
         return false;
     }
 
@@ -4834,6 +5875,16 @@ CString CKeyboardClickerDlg::GetDebuffSampleDirectory(size_t index) const
     return CombinePath(GetDmResourceRootForUse(), DebuffDefinitions[index].sampleDirectory);
 }
 
+CString CKeyboardClickerDlg::GetPotionSampleDirectory(size_t index) const
+{
+    if (index >= _countof(PotionDefinitions))
+    {
+        return CString();
+    }
+
+    return CombinePath(GetDmResourceRootForUse(), PotionDefinitions[index].sampleDirectory);
+}
+
 bool CKeyboardClickerDlg::AddDebuffSample(size_t index)
 {
     if (index >= _countof(DebuffDefinitions))
@@ -4842,6 +5893,144 @@ bool CKeyboardClickerDlg::AddDebuffSample(size_t index)
     }
 
     return AddPictureSamples(GetDebuffSampleDirectory(index), DebuffDefinitions[index].label);
+}
+
+CString CKeyboardClickerDlg::BuildPotionPictureList(size_t index) const
+{
+    if (index >= _countof(PotionDefinitions))
+    {
+        return CString();
+    }
+
+    CString pictures;
+    AppendPicturesFromDirectory(pictures, DmImageFolderName, PotionDefinitions[index].rootPicturePattern);
+    AppendPicturesFromDirectory(pictures, PotionDefinitions[index].sampleDirectory, _T("*.bmp"));
+    return pictures;
+}
+
+bool CKeyboardClickerDlg::ValidatePotionMonitoringSettings()
+{
+    if (m_dmObject == nullptr || !m_advancedInitialized)
+    {
+        SetStatus(_T("请先点击“高级功能”完成 Fairy 初始化。"));
+        return false;
+    }
+
+    if (!m_potionState.hasNumberRegion)
+    {
+        SetStatus(_T("请先设置数字识别范围。"));
+        return false;
+    }
+
+    CString similarityText = GetWindowTextString(m_hornSimilarityEdit);
+    similarityText.Trim();
+    wchar_t* similarityEnd = nullptr;
+    const double similarity = wcstod(similarityText, &similarityEnd);
+    if (similarityEnd == static_cast<LPCWSTR>(similarityText) || *similarityEnd != L'\0' || similarity < 0.1 || similarity > 1.0)
+    {
+        SetStatus(_T("精准度必须是 0.10 到 1.00 之间的小数。"));
+        return false;
+    }
+    m_hornState.similarity = similarity;
+
+    m_potionState.numberIntervalMs = ReadPotionNumberIntervalMs();
+
+    bool hasAction = false;
+    for (size_t i = 0; i < m_potionControls.size(); ++i)
+    {
+        UINT threshold = 0;
+        if (!ReadPotionThreshold(i, threshold))
+        {
+            CString message;
+            message.Format(_T("%s 的数字阈值必须是 0 或更大的整数。"), PotionDefinitions[i].label);
+            SetStatus(message);
+            return false;
+        }
+
+        const UINT key = m_potionControls[i].keyEdit.CapturedKey();
+        if (key == 0 && threshold == 0)
+        {
+            continue;
+        }
+        if (key == 0 || threshold == 0)
+        {
+            CString message;
+            message.Format(_T("%s 需要同时设置按键和“数字低于”阈值；阈值为 0 表示不启用该药品。"), PotionDefinitions[i].label);
+            SetStatus(message);
+            return false;
+        }
+        if (!m_potionState.bottles[i].hasRegion)
+        {
+            CString message;
+            message.Format(_T("请先设置 %s 图片识别范围。"), PotionDefinitions[i].label);
+            SetStatus(message);
+            return false;
+        }
+        if (BuildPotionPictureList(i).IsEmpty())
+        {
+            CString message;
+            message.Format(_T("缺少 %s 图片，请放到 %s 或点击“%s样本”添加。"),
+                PotionDefinitions[i].label,
+                static_cast<LPCTSTR>(GetPotionSampleDirectory(i)),
+                PotionDefinitions[i].label);
+            SetStatus(message);
+            return false;
+        }
+        hasAction = true;
+    }
+
+    if (!hasAction)
+    {
+        SetStatus(_T("请至少给一种药品设置按键和数字阈值。"));
+        return false;
+    }
+
+    return true;
+}
+
+void CKeyboardClickerDlg::UpdatePotionStatusLabels()
+{
+    if (m_potionEnabledCheck.GetSafeHwnd())
+    {
+        m_potionEnabledCheck.SetCheck(m_potionState.enabled ? BST_CHECKED : BST_UNCHECKED);
+    }
+
+    if (m_potionStatusLabel.GetSafeHwnd())
+    {
+        CString text;
+        if (m_potionState.hasLastNumber)
+        {
+            text.Format(_T("数字: %u；颜色偏色: %s"), static_cast<unsigned>(m_potionState.lastNumber), DmNumberOcrColor);
+        }
+        else
+        {
+            text.Format(_T("数字: 未检测；颜色偏色: %s"), DmNumberOcrColor);
+        }
+        m_potionStatusLabel.SetWindowText(text);
+    }
+
+    for (size_t i = 0; i < m_potionControls.size(); ++i)
+    {
+        CString emptyText;
+        emptyText.Format(_T("%s范围: 未设置"), PotionDefinitions[i].label);
+        SetRegionStatus(m_potionControls[i].regionLabel, m_potionState.bottles[i].hasRegion, m_potionState.bottles[i].region, emptyText);
+
+        if (!m_potionControls[i].availabilityLabel.GetSafeHwnd())
+        {
+            continue;
+        }
+
+        CString stateText;
+        if (!m_potionState.bottles[i].hasAvailability)
+        {
+            stateText.Format(_T("%s 状态: 未检测"), PotionDefinitions[i].label);
+        }
+        else
+        {
+            stateText.Format(_T("%s 状态: %s"), PotionDefinitions[i].label, m_potionState.bottles[i].available ? _T("可使用") : _T("不可使用"));
+        }
+        m_potionControls[i].availabilityLabel.SetWindowText(stateText);
+    }
 }
 
 bool CKeyboardClickerDlg::AddPictureSamples(const CString& directory, LPCTSTR label)
@@ -4967,7 +6156,7 @@ bool CKeyboardClickerDlg::ValidateHornRecognitionInputs(CString& hornPictures)
 {
     if (m_dmObject == nullptr || !m_advancedInitialized)
     {
-        SetStatus(_T("请先点击“高级功能”完成大漠初始化。"));
+        SetStatus(_T("请先点击“高级功能”完成 Fairy 初始化。"));
         return false;
     }
 
